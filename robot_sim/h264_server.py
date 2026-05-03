@@ -34,6 +34,8 @@ TRANSPOSE = sys.argv[8] if len(sys.argv) > 8 else None
 FALLBACK_DEVICE = os.environ.get("FALLBACK_DEVICE", "/dev/video0")
 FALLBACK_SCALE = os.environ.get("FALLBACK_SCALE", "960x540")
 FFMPEG_START_SECONDS = 3.0
+TCP_SEND_BUFFER = 65536
+LOW_DELAY_INPUT = ["-fflags", "nobuffer", "-flags", "low_delay", "-probesize", "32", "-analyzeduration", "0"]
 PRESET = os.environ.get("PRESET", "veryfast")
 PROFILE = os.environ.get("PROFILE", "main")
 CRF = os.environ.get("CRF", "18")
@@ -58,6 +60,11 @@ def use_camera_h264():
     return device == "/dev/video2" or os.environ.get("H264_PASSTHROUGH", "").lower() in ("1", "true", "yes")
 
 
+def tune_tcp(conn):
+    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    conn.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, TCP_SEND_BUFFER)
+
+
 def capture_input_cmd(device, passthrough, scale):
     if CAM == "test":
         return [
@@ -74,13 +81,13 @@ def capture_input_cmd(device, passthrough, scale):
         ], False
     if passthrough:
         return [
-            "ffmpeg", "-nostdin",
+            "ffmpeg", "-nostdin", *LOW_DELAY_INPUT,
             "-f", "v4l2", "-input_format", "h264",
             "-video_size", f"{WIDTH}x{HEIGHT}", "-framerate", FPS,
             "-i", device,
         ], True
     return [
-        "ffmpeg", "-nostdin",
+        "ffmpeg", "-nostdin", *LOW_DELAY_INPUT,
         "-f", "v4l2", "-input_format", "mjpeg",
         "-video_size", f"{WIDTH}x{HEIGHT}", "-framerate", FPS,
         "-i", device,
@@ -149,6 +156,7 @@ def stream_ffmpeg(conn, cmd):
 
 
 def serve_client(conn, addr):
+    tune_tcp(conn)
     print(f"client connected {addr} -> starting ffmpeg", flush=True)
     with _lock:
         old_ff, old_conn = _active["ff"], _active["conn"]
