@@ -12,13 +12,27 @@ Implements the robot end of PROTOCOL.md:
 Uses tkinter (built into Python) for the GUI so it works on any Python — pygame's
 font module is broken on Python 3.14.
 """
+import glob
 import json
 import math
 import os
 import socket
 import sys
 import time
-import tkinter as tk
+
+# uv's bundled Python doesn't set TCL_LIBRARY, so tkinter (this sim's GUI) can't
+# find init.tcl. Point it at the bundled tcl/tk before importing tkinter so the
+# sim runs under `uv run` with no extra setup. (No-op on Pythons that find Tk.)
+if "TCL_LIBRARY" not in os.environ:
+    for _p in sorted(glob.glob(os.path.join(sys.base_prefix, "lib", "tcl8.*"))):
+        if os.path.isfile(os.path.join(_p, "init.tcl")):
+            os.environ["TCL_LIBRARY"] = _p
+            _tk = _p.replace("tcl8", "tk8")
+            if os.path.isdir(_tk):
+                os.environ["TK_LIBRARY"] = _tk
+            break
+
+import tkinter as tk     # noqa: E402
 
 CTRL_PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 49602
 TELE_PORT = int(sys.argv[2]) if len(sys.argv) > 2 else 49603
