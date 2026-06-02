@@ -1,0 +1,7 @@
+{
+"label":"Teleop",
+"icon":"icon.png",
+"iconsel":"icon.png",
+"launch":"launch.sh",
+"description":"Robot teleop: live video + overlay HUD + gamepad control"
+}

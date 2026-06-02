@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Local config / runtime logs
+settings.local.json
+*.log
+run.log
+
+# Frame captures / scratch
+*.ppm
+cap_*
+/tmp/
+
+# Build output
+hwdecode/build/
+
+# Proprietary Allwinner Cedar VPU blobs — pull from your own device,
+# see hwdecode/cedar/README.md (do not redistribute).
+hwdecode/cedar/libs/*.so

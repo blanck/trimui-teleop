@@ -1,0 +1,7 @@
+# On-device app runtime (installed into the TrimUI venv; see install_on_device.sh).
+#   pygame        HUD / display + gamepad
+#   numpy + av    only for the SOFTWARE video backend (src/sw_decode.py, PyAV)
+# The HARDWARE backend (hwdec_shmem, Cedar VPU) needs neither — it is a C binary.
+pygame>=2.5
+numpy>=1.24
+av>=11.0
