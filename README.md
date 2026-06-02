@@ -71,10 +71,13 @@ plain `pip` works too). The desktop demo also needs **ffmpeg** on `PATH`
 ```bash
 uv run python robot_sim/robot.py                      # robot simulator (advertises itself)
 uv run python robot_sim/h264_server.py 0 1280 720 30  # webcam → video (0 = cam index, or "test")
+uv run python src/teleop.py                            # the ground station (a 1280x720 window)
 ```
-Then run `src/teleop.py` (on the device, or any desktop with a gamepad) — it discovers the
-sim, shows the webcam, and the sticks drive the on-screen robot. The diagnostic harness in
-`tools/` needs the extra: `uv sync --extra tools`.
+The third command runs the **client itself on your desktop** — handy for UI work without the
+handheld. It discovers the sim, shows the webcam, and a plugged-in gamepad drives the on-screen
+robot. Off-device it opens a window and uses the current interpreter for the software decoder;
+on the handheld it's fullscreen with the mali venv. The diagnostic harness in `tools/` needs
+the extra: `uv sync --extra tools`.
 
 ## The robot side
 
