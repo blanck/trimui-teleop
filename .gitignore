@@ -27,3 +27,4 @@ hwdecode/build/
 # Proprietary Allwinner Cedar VPU blobs — pull from your own device,
 # see hwdecode/cedar/README.md (do not redistribute).
 hwdecode/cedar/libs/*.so
+settings.json
