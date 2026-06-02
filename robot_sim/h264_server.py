@@ -30,6 +30,10 @@ PROFILE = os.environ.get("PROFILE", "main")             # main (CABAC) compresse
 CRF = os.environ.get("CRF", "18")                       # quality target: lower = sharper (more bits) on motion
 
 
+_active = {"ff": None, "conn": None}     # single-client: one camera ffmpeg at a time
+_lock = threading.Lock()
+
+
 def serve_client(conn, addr):
     print(f"client connected {addr} -> starting ffmpeg", flush=True)
     if CAM == "test":                    # reliable synthetic moving source (no camera flakiness)
@@ -61,7 +65,23 @@ def serve_client(conn, addr):
         "-flush_packets", "1",          # send each packet immediately, no output buffering
         "-f", "h264", "pipe:1",
     ]
-    ff = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=open("/tmp/ff_client.err", "wb"))
+    # Hand the camera over: kill any previous client's ffmpeg and free the device
+    # (one ffmpeg can hold the camera at a time; a reconnecting client must not
+    # spawn a second one or they both fail). Serialized so the handoff is clean.
+    with _lock:
+        old_ff, old_conn = _active["ff"], _active["conn"]
+        if old_ff:
+            try:
+                old_ff.kill(); old_ff.wait(timeout=2)
+            except Exception:
+                pass
+        if old_conn is not None and old_conn is not conn:
+            try:
+                old_conn.close()
+            except Exception:
+                pass
+        ff = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=open("/tmp/ff_client.err", "wb"))
+        _active["ff"], _active["conn"] = ff, conn
     try:
         while True:
             chunk = ff.stdout.read(4096)
