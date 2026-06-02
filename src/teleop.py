@@ -38,7 +38,12 @@ def start_decoder(backend, host, port):
     os.system("kill $(pidof hwdec_shmem) 2>/dev/null; pkill -9 -f src/sw_decode.py 2>/dev/null")
     time.sleep(1.2)
     if is_sw(backend):
-        cmd = [f"{BASE}/rtvenv/bin/python3.11", f"{BASE}/src/sw_decode.py",
+        # On the device the SW decoder runs in the mali venv; off-device (e.g.
+        # `uv run` on a desktop) there's no rtvenv, so use the current interpreter.
+        py = os.path.join(BASE, "rtvenv", "bin", "python3.11")
+        if not os.path.exists(py):
+            py = sys.executable
+        cmd = [py, os.path.join(BASE, "src", "sw_decode.py"),
                f"tcp://{host}:{port}", "/tmp/hwframe"]
         env = dict(os.environ)
     else:
@@ -311,7 +316,14 @@ def main():
 
     pygame.init()
     pygame.mouse.set_visible(False)
-    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    # Fullscreen on the handheld; a 1280x720 window off-device so the same app is
+    # usable for UI dev on a desktop (`uv run python src/teleop.py`). Force windowed
+    # with TELEOP_WINDOWED=1.
+    on_device = os.path.exists(os.path.join(BASE, "rtvenv"))
+    if on_device and os.environ.get("TELEOP_WINDOWED") != "1":
+        screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
+    else:
+        screen = pygame.display.set_mode((1280, 720))
     SW, SH = screen.get_size()
     icon = load_icon()                      # after set_mode so convert_alpha works
     if icon:
