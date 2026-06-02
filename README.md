@@ -64,13 +64,17 @@ just blits it and draws the UI — so the two backends are interchangeable and t
 
 ## Quick start (desktop, no robot or handheld)
 
+Dependencies are in `pyproject.toml` (managed with [uv](https://docs.astral.sh/uv/);
+plain `pip` works too). The desktop demo also needs **ffmpeg** on `PATH`
+(`brew install ffmpeg` / `apt install ffmpeg`).
+
 ```bash
-pip install -r requirements-dev.txt           # numpy, opencv-python  (+ system ffmpeg)
-python robot_sim/robot.py                      # the robot simulator (advertises itself)
-python robot_sim/h264_server.py 0 1280 720 30  # webcam → video (0 = cam index, or "test")
+uv run python robot_sim/robot.py                      # robot simulator (advertises itself)
+uv run python robot_sim/h264_server.py 0 1280 720 30  # webcam → video (0 = cam index, or "test")
 ```
 Then run `src/teleop.py` (on the device, or any desktop with a gamepad) — it discovers the
-sim, shows the webcam, and the sticks drive the on-screen robot.
+sim, shows the webcam, and the sticks drive the on-screen robot. The diagnostic harness in
+`tools/` needs the extra: `uv sync --extra tools`.
 
 ## The robot side
 
@@ -107,12 +111,19 @@ Needs [zig](https://ziglang.org) as the aarch64 cross compiler. The software bac
 ## Deploy to the handheld
 
 ```bash
-ADB=/path/to/adb ./deploy.sh                   # pushes app to a USB-connected TrimUI
-adb shell sh /mnt/UDISK/install_on_device.sh   # first time: Python deps into the venv
+ADB=/path/to/adb ./deploy.sh        # pushes the app to a USB-connected TrimUI
 ```
 Then launch **Teleop** from the Apps menu — it finds the robot automatically.
-⚠️ Display gotcha: pip's pygame has no working video driver on this device; the launcher
-uses the device's mali SDL (see `install_on_device.sh`).
+
+**One-time device setup** (the app runs from a venv at `/mnt/UDISK/rtvenv`, python3.11):
+```bash
+/mnt/UDISK/rtvenv/bin/python3.11 -m pip install pygame numpy av
+```
+⚠️ **Display gotcha:** pip's pygame ships a generic SDL2 whose only video driver on this
+device is "offscreen" → blank screen. Replace the `libSDL2-2.0.so.0` bundled inside pygame
+with the device's `/usr/trimui/lib/libSDL2-2.0.so.0` (which has the **mali** driver the
+launcher uses via `SDL_VIDEODRIVER=mali`). `numpy`/`av` are only needed for the software
+decoder; the hardware (Cedar) backend is a standalone C binary.
 
 ## Controls
 

@@ -1,0 +1,27 @@
+[project]
+name = "trimui-teleop"
+version = "0.1.0"
+description = "Robot teleoperation ground station for the TrimUI Smart Pro handheld"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Jonas Blanck", email = "jonas@blanck.hk" }]
+
+# Core: enough to run the app (teleop.py) and the software decoder anywhere.
+# The desktop demo (robot_sim/robot.py + h264_server.py) needs only system ffmpeg.
+dependencies = [
+    "pygame>=2.5",   # HUD / display + gamepad
+    "numpy>=1.24",   # software decode + diagnostics
+    "av>=11.0",      # software H.264 decode (PyAV)
+]
+
+[project.optional-dependencies]
+tools = ["opencv-python>=4.8"]   # the diagnostic harness in tools/  (also needs system ffmpeg)
+pi = ["gpiozero>=2.0"]           # integrations/pi_gpio_bridge.py    (Raspberry Pi)
+# ROS 2 (integrations/ros2_bridge.py) uses rclpy from a ROS 2 install, not pip.
+
+[project.urls]
+Homepage = "https://github.com/blanck/trimui-teleop"
+
+[tool.uv]
+package = false      # this is an app / scripts repo, not an installable library

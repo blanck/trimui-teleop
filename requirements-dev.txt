@@ -1,7 +1,0 @@
-# PC-side robot simulator + diagnostic harness (robot_sim/).
-#   numpy + opencv-python   motion_source.py, score.py, autorun.py (frame gen / scoring)
-#   robot.py uses tkinter (Python stdlib) — no pip dep
-# System dependency (NOT pip): ffmpeg must be on PATH for h264_server.py / natsrc.py
-#   macOS:  brew install ffmpeg        Debian/Ubuntu:  apt install ffmpeg
-numpy>=1.24
-opencv-python>=4.8

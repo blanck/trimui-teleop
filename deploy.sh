@@ -1,8 +1,8 @@
 #!/bin/bash
 # Deploy Teleop to a USB-connected TrimUI Smart Pro.
 #
-# Prereqs (one time): a Python venv with the device's mali SDL at /mnt/UDISK/rtvenv
-# (see install_on_device.sh) and, for the hardware decoder, build it first:
+# Prereqs (one time): the Python venv at /mnt/UDISK/rtvenv with the device's mali SDL
+# (see README "Deploy") and, for the hardware decoder, build it first:
 #   ZIG=$(command -v zig) ./hwdecode/build.sh
 #
 #   ADB=/path/to/adb ./deploy.sh     # ADB defaults to `adb` on PATH
@@ -18,7 +18,6 @@ command -v "$ADB" >/dev/null || { echo "adb not found — set ADB=/path/to/adb";
 "$ADB" push src/teleop.py src/sw_decode.py src/discovery.py src/robot_link.py \
             src/config.py src/controller.py /mnt/UDISK/src/
 "$ADB" push res/ShareTechMono.ttf res/icon.png /mnt/UDISK/res/
-"$ADB" push install_on_device.sh /mnt/UDISK/
 if [ -f hwdecode/build/hwdec_shmem ]; then
   "$ADB" push hwdecode/build/hwdec_shmem /mnt/UDISK/hwdec_shmem
   "$ADB" shell 'chmod +x /mnt/UDISK/hwdec_shmem'
@@ -32,5 +31,7 @@ fi
 "$ADB" shell 'chmod +x /mnt/SDCARD/Apps/Teleop/launch.sh'
 
 echo
-echo "Deployed. First time only:  adb shell sh /mnt/UDISK/install_on_device.sh"
+echo "Deployed. First time, set up the venv on the device (see README 'Deploy'):"
+echo "  /mnt/UDISK/rtvenv/bin/python3.11 -m pip install pygame numpy av"
+echo "  (and swap pygame's bundled libSDL2 for the device's mali one — see README)."
 echo "Then launch 'Teleop' from the Apps menu (it finds the robot automatically)."
