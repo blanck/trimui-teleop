@@ -559,7 +559,7 @@ def main():
                  ("BOOST" if boost else str(mode).upper())),
                  ALERT if estop else (ACC if action else (WARN if boost else TXT))),
                 (None, "SPEED", f"{spd:.2f} M/S", TXT),
-                (None, "SYS", f"{render_fps:.0f}FPS {cpu.pct:.0f}% CPU", TXT),
+                (None, "SYS", f"{render_fps:.0f} FPS {cpu.pct:.0f}% CPU", TXT),
             ]
             if "batt" in td:             # robot reports a battery -> show it
                 rows.insert(3, (OKC if batt > 20 else ALERT, "POWER", f"{batt:.0f}%",
