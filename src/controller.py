@@ -43,7 +43,7 @@ class Controller:
         fwd = self._deadzone(self._axis(self.cfg["drive_axis"])) \
             + self._deadzone(self._axis(self.cfg.get("drive_axis2", -1)))
         fwd = max(-1.0, min(1.0, fwd))
-        if self.cfg.get("invert_drive"):
+        if not self.cfg.get("invert_drive"):   # stick up (negative axis) = forward
             fwd = -fwd
         turn = self._deadzone(self._axis(self.cfg["turn_axis"])) \
              + self._deadzone(self._axis(self.cfg.get("turn_axis2", -1)))
