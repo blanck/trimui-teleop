@@ -550,20 +550,20 @@ def main():
             action = cmd["action"]
             be = "SW" if is_sw(cur_backend) else "HW"
             rows = [
+                (OKC, "ROBOT", str(tgt["name"]).upper()[:14], ACC),
                 (OKC if link else ALERT, "LINK", f"ONLINE {rtt:.0f}MS" if link else "OFFLINE",
                  OKC if link else ALERT),
-                (None, "ROBOT", str(tgt["name"]).upper()[:14], ACC),
                 (OKC if vstate == "connected" else DIM, "VIDEO", f"{vstate.upper()} {be}",
                  OKC if vstate == "connected" else DIM),
                 (OKC if batt > 20 else ALERT, "POWER", f"{batt:.0f}%", OKC if batt > 20 else ALERT),
-                (None, "SPEED", f"{spd:.2f} M/S", TXT),
                 (None, "MODE", "E-STOP" if estop else ("ACTION" if action else
                  ("BOOST" if boost else str(mode).upper())),
                  ALERT if estop else (ACC if action else (WARN if boost else TXT))),
-                (OKC if cmd["connected"] else ALERT, "INPUT",
-                 "PAD OK" if cmd["connected"] else "NO PAD", TXT if cmd["connected"] else ALERT),
-                (None, "SYS", f"{render_fps:.0f}FPS {cpu.pct:.0f}%CPU", WARN),
+                (None, "SPEED", f"{spd:.2f} M/S", TXT),
+                (None, "SYS", f"{render_fps:.0f}FPS {cpu.pct:.0f}% CPU", TXT),
             ]
+            if not cmd["connected"]:     # only surface INPUT when the pad is missing
+                rows.insert(len(rows) - 1, (ALERT, "INPUT", "NO PAD", ALERT))
             hud_surf = render_panel("TELEMETRY", rows, f_hdr, f_row, 322)
         screen.blit(hud_surf, (16, 16))
         screen.blit(chip, (SW - chip.get_width() - 16, 16))
