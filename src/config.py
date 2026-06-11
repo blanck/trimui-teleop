@@ -28,6 +28,7 @@ DEFAULTS = {
         "boost_button": 0, "estop_button": 4,  # B / L shoulder
         "action_button": 1,                    # A — passed through to the robot
         "menu_button": 8, "confirm_button": 1, "quit_buttons": [6, 7],
+        "restart_button": 7,                   # START — restart the app
     },
     "screen": {"width": 1280, "height": 720, "fullscreen": True, "fps": 30},
 }

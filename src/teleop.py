@@ -401,6 +401,8 @@ def main():
 
     menu_button = cfg["controls"].get("menu_button", 8)
     confirm_button = cfg["controls"].get("confirm_button", 0)
+    restart_button = cfg["controls"].get("restart_button", 7)
+    restart = False
     menu_open = False; menu_idx = 0; menu_items = menu_list()
     switch_t = 0.0; notice = ""  # decoder-restart debounce + the banner shown during it
     cap_left = 0; cap_n = 0      # X-button burst capture of the raw input frames
@@ -422,6 +424,8 @@ def main():
                     continue
                 if e.button in (2, 3):                       # X / Y -> capture a burst of input frames
                     cap_left = 10
+                if e.button == restart_button and not ctrl.quit_combo():
+                    restart = True; running = False          # START alone -> relaunch
                 if e.button == menu_button:
                     menu_open = not menu_open; menu_idx = 0
                     if menu_open:
@@ -613,6 +617,9 @@ def main():
     # stop the decoder we own
     os.system("kill $(pidof hwdec_shmem) 2>/dev/null; pkill -9 -f src/sw_decode.py 2>/dev/null")
     pygame.quit()
+    if restart:
+        print("restarting", flush=True)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 if __name__ == "__main__":
