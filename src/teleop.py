@@ -262,7 +262,7 @@ def draw_reticle(screen, SW, SH):
     pygame.draw.circle(screen, col, (cx, cy), 2)
 
 
-def splash(screen, SW, SH, icon, title, sub, f_big, f_small):
+def splash(screen, SW, SH, icon, title, sub, f_big, f_small, sub_dy=0):
     """Branded full-screen message (startup scan / awaiting video)."""
     screen.fill((6, 9, 13))
     cy = SH // 2 - 70
@@ -272,7 +272,7 @@ def splash(screen, SW, SH, icon, title, sub, f_big, f_small):
     screen.blit(t, (SW // 2 - t.get_width() // 2, cy))
     if sub:
         h = f_small.render(sub, True, DIM)
-        screen.blit(h, (SW // 2 - h.get_width() // 2, cy + 54))
+        screen.blit(h, (SW // 2 - h.get_width() // 2, cy + 54 + sub_dy))
 
 
 def draw_menu(screen, SW, SH, fonts, items, idx, sub=""):
@@ -524,7 +524,7 @@ def main():
         else:
             splash(screen, SW, SH, icon, "AWAITING VIDEO LINK",
                    ("backend: " + ("software" if is_sw(cur_backend) else "hardware")),
-                   f_wait, f_row)
+                   f_wait, f_row, sub_dy=3 * f_row.get_linesize())
 
         # ---- HUD viewport frame: corner brackets + subtle center reticle ----
         fc = (0, 138, 162)
