@@ -39,10 +39,15 @@ class Controller:
             return {"fwd": 0.0, "turn": 0.0, "boost": False,
                     "estop": False, "connected": False}
 
-        fwd = self._deadzone(self._axis(self.cfg["drive_axis"]))
+        # either stick drives: sum both sticks' contributions, clamped to [-1, 1]
+        fwd = self._deadzone(self._axis(self.cfg["drive_axis"])) \
+            + self._deadzone(self._axis(self.cfg.get("drive_axis2", -1)))
+        fwd = max(-1.0, min(1.0, fwd))
         if self.cfg.get("invert_drive"):
             fwd = -fwd
-        turn = self._deadzone(self._axis(self.cfg["turn_axis"]))
+        turn = self._deadzone(self._axis(self.cfg["turn_axis"])) \
+             + self._deadzone(self._axis(self.cfg.get("turn_axis2", -1)))
+        turn = max(-1.0, min(1.0, turn))
 
         return {
             "fwd": round(fwd, 3),

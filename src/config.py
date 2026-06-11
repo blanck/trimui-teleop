@@ -22,7 +22,9 @@ DEFAULTS = {
     "steer": {"host": "auto", "port": 49602, "hz": 30},
     "telemetry": {"port": 49603},
     "controls": {                     # defaults for the TrimUI Smart Pro gamepad
-        "drive_axis": 1, "turn_axis": 3, "invert_drive": True, "deadzone": 0.12,
+        "drive_axis": 1, "turn_axis": 3,      # left stick Y, right stick X
+        "drive_axis2": 4, "turn_axis2": 0,    # right stick Y, left stick X
+        "invert_drive": True, "deadzone": 0.12,
         "boost_button": 0, "estop_button": 1, "menu_button": 8,
         "confirm_button": 1, "quit_buttons": [6, 7],
     },
