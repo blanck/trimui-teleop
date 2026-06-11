@@ -37,7 +37,7 @@ class Controller:
     def read(self):
         if not self.pad:
             return {"fwd": 0.0, "turn": 0.0, "boost": False,
-                    "estop": False, "connected": False}
+                    "estop": False, "action": False, "connected": False}
 
         # either stick drives: sum both sticks' contributions, clamped to [-1, 1]
         fwd = self._deadzone(self._axis(self.cfg["drive_axis"])) \
@@ -54,6 +54,7 @@ class Controller:
             "turn": round(turn, 3),
             "boost": self._button(self.cfg.get("boost_button", -1)),
             "estop": self._button(self.cfg.get("estop_button", -1)),
+            "action": self._button(self.cfg.get("action_button", -1)),
             "connected": True,
         }
 

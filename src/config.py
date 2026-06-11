@@ -25,8 +25,9 @@ DEFAULTS = {
         "drive_axis": 1, "turn_axis": 3,      # left stick Y, right stick X
         "drive_axis2": 4, "turn_axis2": 0,    # right stick Y, left stick X
         "invert_drive": True, "deadzone": 0.12,
-        "boost_button": 0, "estop_button": 1, "menu_button": 8,
-        "confirm_button": 1, "quit_buttons": [6, 7],
+        "boost_button": 0, "estop_button": 4,  # B / L shoulder
+        "action_button": 1,                    # A — passed through to the robot
+        "menu_button": 8, "confirm_button": 1, "quit_buttons": [6, 7],
     },
     "screen": {"width": 1280, "height": 720, "fullscreen": True, "fps": 30},
 }

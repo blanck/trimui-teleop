@@ -9,7 +9,8 @@ new platform is just:
     def drive(fwd, turn, boost, estop):     # fwd/turn in -1..1; estop -> stop
         ...                                  # actuate your motors here
 
-    link = RobotLink(name="my-robot", on_control=drive)
+    link = RobotLink(name="my-robot", on_control=drive,
+                     on_action=lambda: ...)  # optional: A button, once per press
     link.set_telemetry(batt=87, speed=0.4, mode="drive")   # optional, anytime
     link.run()                               # blocks; or link.start() to background it
 
@@ -27,16 +28,18 @@ CTRL_PORT, TELE_PORT, STREAM_PORT = 49602, 49603, 49601
 
 
 class RobotLink:
-    def __init__(self, name="robot", on_control=None, watchdog=0.5,
+    def __init__(self, name="robot", on_control=None, on_action=None, watchdog=0.5,
                  ctrl_port=CTRL_PORT, tele_port=TELE_PORT, stream_port=STREAM_PORT):
         self.name = name
         self.on_control = on_control          # callback(fwd, turn, boost, estop)
+        self.on_action = on_action            # callback(); fired once per A press
         self.watchdog = watchdog              # stop if no control for this long (s)
         self.ctrl_port, self.tele_port, self.stream_port = ctrl_port, tele_port, stream_port
         self.tele = {"batt": 100.0, "speed": 0.0, "mode": "idle"}
         self.device_ip = None
         self._last_rx = 0.0
         self._ack_seq = self._ack_t = 0
+        self._action_prev = False
         self._stop = False
         self._rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -92,6 +95,10 @@ class RobotLink:
             else:
                 self._emit(float(m.get("fwd", 0.0)), float(m.get("turn", 0.0)),
                            bool(m.get("boost", False)), False)
+            act = bool(m.get("action", False))
+            if act and not self._action_prev and self.on_action:
+                self.on_action()
+            self._action_prev = act
 
     def _wd_loop(self):
         while not self._stop:

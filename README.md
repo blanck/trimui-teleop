@@ -133,7 +133,8 @@ decoder; the hardware (Cedar) backend is a standalone C binary.
 | Input | Action |
 |---|---|
 | Either stick | drive (throttle / steering) |
-| A | boost · B | e-stop |
+| A | action (sent to the robot, e.g. stand / sit) |
+| B | boost · L1 | e-stop |
 | MENU | settings menu (decoder · invert drive · deadzone · rescan · resume · exit) |
 | Select + Start | backup quit |
 

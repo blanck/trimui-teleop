@@ -482,11 +482,13 @@ def main():
         if grace == 0 and ctrl.quit_combo():        # Select+Start: hidden backup exit
             running = False
         if menu_open:        # while in the menu, don't drive — sticks navigate
-            cmd = {"fwd": 0.0, "turn": 0.0, "boost": False, "estop": False, "connected": cmd["connected"]}
+            cmd = {"fwd": 0.0, "turn": 0.0, "boost": False, "estop": False,
+                   "action": False, "connected": cmd["connected"]}
         seq += 1
         msg = {"type": "ctrl", "seq": seq, "t": now_ms(),
                "fwd": cmd["fwd"], "turn": cmd["turn"],
-               "boost": bool(cmd["boost"]), "estop": bool(cmd["estop"])}
+               "boost": bool(cmd["boost"]), "estop": bool(cmd["estop"]),
+               "action": bool(cmd["action"])}
         try:
             steer_sock.sendto(json.dumps(msg).encode(), (tgt["host"], tgt["steer"]))
         except OSError:
@@ -541,6 +543,7 @@ def main():
             hud_t = now
             batt = td.get("batt", 0); spd = td.get("speed", 0); mode = td.get("mode", "?")
             estop = cmd["estop"] or td.get("estop"); boost = cmd["boost"]
+            action = cmd["action"]
             be = "SW" if is_sw(cur_backend) else "HW"
             rows = [
                 (OKC if link else ALERT, "LINK", f"ONLINE {rtt:.0f}MS" if link else "OFFLINE",
@@ -550,8 +553,9 @@ def main():
                  OKC if vstate == "connected" else DIM),
                 (OKC if batt > 20 else ALERT, "POWER", f"{batt:.0f}%", OKC if batt > 20 else ALERT),
                 (None, "SPEED", f"{spd:.2f} M/S", TXT),
-                (None, "MODE", "E-STOP" if estop else ("BOOST" if boost else str(mode).upper()),
-                 ALERT if estop else (WARN if boost else TXT)),
+                (None, "MODE", "E-STOP" if estop else ("ACTION" if action else
+                 ("BOOST" if boost else str(mode).upper())),
+                 ALERT if estop else (ACC if action else (WARN if boost else TXT))),
                 (OKC if cmd["connected"] else ALERT, "INPUT",
                  "PAD OK" if cmd["connected"] else "NO PAD", TXT if cmd["connected"] else ALERT),
                 (None, "SYS", f"{render_fps:.0f}FPS {cpu.pct:.0f}%CPU", WARN),
