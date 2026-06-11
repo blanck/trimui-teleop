@@ -61,7 +61,7 @@ Robot replies to the **source IP of the control packets**, at **10 Hz**.
 
 | field | meaning |
 |-------|---------|
-| `batt`| battery %, 0..100 |
+| `batt`| battery %, 0..100 — optional; the handheld hides POWER if absent |
 | `speed`| speed magnitude (m/s or sim units) |
 | `mode`| `"idle"` / `"drive"` / `"estop"` / `"lost"` / freeform |
 | `ack_seq` / `ack_t` | last control `seq`/`t` the robot acted on (for RTT) |

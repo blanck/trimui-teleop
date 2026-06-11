@@ -555,13 +555,15 @@ def main():
                  OKC if link else ALERT),
                 (OKC if vstate == "connected" else DIM, "VIDEO", f"{vstate.upper()} {be}",
                  OKC if vstate == "connected" else DIM),
-                (OKC if batt > 20 else ALERT, "POWER", f"{batt:.0f}%", OKC if batt > 20 else ALERT),
                 (None, "MODE", "E-STOP" if estop else ("ACTION" if action else
                  ("BOOST" if boost else str(mode).upper())),
                  ALERT if estop else (ACC if action else (WARN if boost else TXT))),
                 (None, "SPEED", f"{spd:.2f} M/S", TXT),
                 (None, "SYS", f"{render_fps:.0f}FPS {cpu.pct:.0f}% CPU", TXT),
             ]
+            if "batt" in td:             # robot reports a battery -> show it
+                rows.insert(3, (OKC if batt > 20 else ALERT, "POWER", f"{batt:.0f}%",
+                                OKC if batt > 20 else ALERT))
             if not cmd["connected"]:     # only surface INPUT when the pad is missing
                 rows.insert(len(rows) - 1, (ALERT, "INPUT", "NO PAD", ALERT))
             hud_surf = render_panel("TELEMETRY", rows, f_hdr, f_row, 322)

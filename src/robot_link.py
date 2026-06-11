@@ -35,7 +35,7 @@ class RobotLink:
         self.on_action = on_action            # callback(); fired once per A press
         self.watchdog = watchdog              # stop if no control for this long (s)
         self.ctrl_port, self.tele_port, self.stream_port = ctrl_port, tele_port, stream_port
-        self.tele = {"batt": 100.0, "speed": 0.0, "mode": "idle"}
+        self.tele = {"speed": 0.0, "mode": "idle"}   # no batt until set_telemetry(batt=...)
         self.device_ip = None
         self._last_rx = 0.0
         self._ack_seq = self._ack_t = 0
@@ -110,11 +110,13 @@ class RobotLink:
         while not self._stop:
             if self.device_ip:
                 stale = self._last_rx and time.monotonic() - self._last_rx > self.watchdog
-                msg = json.dumps({"type": "tele", "t": int(time.monotonic() * 1000),
-                                  "batt": round(self.tele["batt"], 1),
-                                  "speed": round(self.tele["speed"], 2),
-                                  "mode": "lost" if stale else self.tele["mode"],
-                                  "ack_seq": self._ack_seq, "ack_t": self._ack_t}).encode()
+                m = {"type": "tele", "t": int(time.monotonic() * 1000),
+                     "speed": round(self.tele["speed"], 2),
+                     "mode": "lost" if stale else self.tele["mode"],
+                     "ack_seq": self._ack_seq, "ack_t": self._ack_t}
+                if "batt" in self.tele:   # only report a battery the adapter has set
+                    m["batt"] = round(self.tele["batt"], 1)
+                msg = json.dumps(m).encode()
                 try:
                     self._tx.sendto(msg, (self.device_ip, self.tele_port))
                 except OSError:
