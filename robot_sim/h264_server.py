@@ -16,6 +16,7 @@ On Linux, /dev/video2 tries hardware H264 passthrough first and falls back to
 """
 import os
 import select
+import shutil
 import socket
 import subprocess
 import sys
@@ -126,7 +127,11 @@ def capture_attempts():
 
 
 def stream_ffmpeg(conn, cmd):
-    ff = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=open("/tmp/ff_client.err", "ab"))
+    try:
+        ff = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=open("/tmp/ff_client.err", "ab"))
+    except FileNotFoundError:
+        print("ffmpeg not found, cannot stream video, install ffmpeg to enable video", flush=True)
+        return False
     with _lock:
         _active["ff"] = ff
     try:
@@ -188,6 +193,8 @@ def serve_client(conn, addr):
 
 
 def main():
+    if shutil.which("ffmpeg") is None:
+        print("ffmpeg not found, video will not stream until ffmpeg is installed", flush=True)
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.bind(("0.0.0.0", PORT))
