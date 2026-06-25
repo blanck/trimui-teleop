@@ -31,6 +31,16 @@ DEFAULTS = {
         "restart_button": 7,                   # START — restart the app
     },
     "screen": {"width": 1280, "height": 720, "fullscreen": True, "fps": 30},
+    "phrases": [                       # D-pad up/down selects, B speaks on the robot
+        "hi",
+        "hello there",
+        "out of my way please",
+        "beep boop",
+        "i am a robot",
+        "nice to meet you",
+        "oh no",
+        "thank you",
+    ],
 }
 
 

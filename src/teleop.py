@@ -402,8 +402,15 @@ def main():
     menu_button = cfg["controls"].get("menu_button", 8)
     confirm_button = cfg["controls"].get("confirm_button", 0)
     restart_button = cfg["controls"].get("restart_button", 7)
+    say_button = cfg["controls"].get("boost_button", 0)
     restart = False
     menu_open = False; menu_idx = 0; menu_items = menu_list()
+
+    # Phrases the robot can speak, D-pad up/down selects, B sends the current one
+    phrases = cfg.get("phrases", [])
+    phrase_idx = 0
+    say_seq = 0
+    phrase_chip = None; phrase_chip_idx = -1
     switch_t = 0.0; notice = ""  # decoder-restart debounce + the banner shown during it
     cap_left = 0; cap_n = 0      # X-button burst capture of the raw input frames
     print(f"teleop {VERSION} up", flush=True)
@@ -424,6 +431,16 @@ def main():
                     continue
                 if e.button in (2, 3):                       # X / Y -> capture a burst of input frames
                     cap_left = 10
+
+                # B speaks the selected phrase when not in the menu
+                if e.button == say_button and not menu_open and phrases:
+                    say_seq += 1
+                    say_msg = {"type": "say", "seq": say_seq, "text": phrases[phrase_idx]}
+                    try:
+                        steer_sock.sendto(json.dumps(say_msg).encode(), (tgt["host"], tgt["steer"]))
+                    except OSError:
+                        pass
+
                 if e.button == restart_button and not ctrl.quit_combo():
                     restart = True; running = False          # START alone -> relaunch
                 if e.button == menu_button:
@@ -473,11 +490,20 @@ def main():
                         menu_open = False
                     elif sel == "Exit":
                         running = False
-            elif e.type == pygame.JOYHATMOTION and menu_open:
-                if e.value[1] > 0:
-                    menu_idx = (menu_idx - 1) % len(menu_items)
-                elif e.value[1] < 0:
-                    menu_idx = (menu_idx + 1) % len(menu_items)
+            elif e.type == pygame.JOYHATMOTION:
+                # In the menu the D-pad moves the selection
+                if menu_open:
+                    if e.value[1] > 0:
+                        menu_idx = (menu_idx - 1) % len(menu_items)
+                    elif e.value[1] < 0:
+                        menu_idx = (menu_idx + 1) % len(menu_items)
+
+                # Otherwise the D-pad up/down scrolls the speak phrase
+                elif phrases:
+                    if e.value[1] > 0:
+                        phrase_idx = (phrase_idx - 1) % len(phrases)
+                    elif e.value[1] < 0:
+                        phrase_idx = (phrase_idx + 1) % len(phrases)
         if grace > 0:
             grace -= 1
 
@@ -590,6 +616,13 @@ def main():
         # ---- throttle / steering gauges ----
         draw_axis(screen, 24, SH - 94, 360, 22, cmd["fwd"], ACC, "THR", f_row)
         draw_axis(screen, 24, SH - 52, 360, 22, cmd["turn"], ACC, "DIR", f_row)
+
+        # ---- speak phrase chip, B says this, cached until the selection changes ----
+        if phrases:
+            if phrase_chip is None or phrase_idx != phrase_chip_idx:
+                phrase_chip = render_chip(f"SAY \u25b8 {phrases[phrase_idx].upper()}", f_chip)
+                phrase_chip_idx = phrase_idx
+            screen.blit(phrase_chip, ((SW - phrase_chip.get_width()) // 2, SH - phrase_chip.get_height() - 18))
 
         if vstate == "connected" and not link:
             draw_banner(screen, SW, 22, "LINK LOST  --  ROBOT STOPPED", f_ban, ALERT)

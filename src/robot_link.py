@@ -28,11 +28,12 @@ CTRL_PORT, TELE_PORT, STREAM_PORT = 49602, 49603, 49601
 
 
 class RobotLink:
-    def __init__(self, name="robot", on_control=None, on_action=None, watchdog=0.5,
+    def __init__(self, name="robot", on_control=None, on_action=None, on_say=None, watchdog=0.5,
                  ctrl_port=CTRL_PORT, tele_port=TELE_PORT, stream_port=STREAM_PORT):
         self.name = name
         self.on_control = on_control          # callback(fwd, turn, boost, estop)
         self.on_action = on_action            # callback(); fired once per A press
+        self.on_say = on_say                  # callback(text); fired on a say message
         self.watchdog = watchdog              # stop if no control for this long (s)
         self.ctrl_port, self.tele_port, self.stream_port = ctrl_port, tele_port, stream_port
         self.tele = {"speed": 0.0, "mode": "idle"}   # no batt until set_telemetry(batt=...)
@@ -85,7 +86,15 @@ class RobotLink:
                 continue
             except Exception:
                 continue
-            if m.get("type", "ctrl") != "ctrl":
+            msg_type = m.get("type", "ctrl")
+
+            # Speak a phrase, does not touch the drive watchdog
+            if msg_type == "say":
+                text = str(m.get("text", "")).strip()
+                if text and len(text) <= 200 and self.on_say:
+                    self.on_say(text)
+                continue
+            if msg_type != "ctrl":
                 continue
             self.device_ip = addr[0]
             self._last_rx = time.monotonic()
