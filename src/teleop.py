@@ -114,6 +114,15 @@ def now_ms():
     return int(time.monotonic() * 1000)
 
 
+def say_text(phrases, phrase_idx, emotions, emotion_idx):
+    """Combine the selected emotion and phrase into a v3 tagged string."""
+    phrase = phrases[phrase_idx]
+    emotion = emotions[emotion_idx] if emotions else "neutral"
+    if emotion == "neutral":
+        return phrase
+    return f"[{emotion}] {phrase}"
+
+
 class CpuMon:
     def __init__(self):
         try:
@@ -410,7 +419,11 @@ def main():
     phrases = cfg.get("phrases", [])
     phrase_idx = 0
     say_seq = 0
-    phrase_chip = None; phrase_chip_idx = -1
+
+    # Emotions, D-pad left/right selects, prepended to the phrase as a v3 tag
+    emotions = cfg.get("emotions", [])
+    emotion_idx = 0
+    phrase_chip = None; phrase_chip_key = None
     switch_t = 0.0; notice = ""  # decoder-restart debounce + the banner shown during it
     cap_left = 0; cap_n = 0      # X-button burst capture of the raw input frames
     print(f"teleop {VERSION} up", flush=True)
@@ -432,10 +445,10 @@ def main():
                 if e.button in (2, 3):                       # X / Y -> capture a burst of input frames
                     cap_left = 10
 
-                # B speaks the selected phrase when not in the menu
+                # B speaks the selected phrase with the selected emotion when not in the menu
                 if e.button == say_button and not menu_open and phrases:
                     say_seq += 1
-                    say_msg = {"type": "say", "seq": say_seq, "text": phrases[phrase_idx]}
+                    say_msg = {"type": "say", "seq": say_seq, "text": say_text(phrases, phrase_idx, emotions, emotion_idx)}
                     try:
                         steer_sock.sendto(json.dumps(say_msg).encode(), (tgt["host"], tgt["steer"]))
                     except OSError:
@@ -498,12 +511,16 @@ def main():
                     elif e.value[1] < 0:
                         menu_idx = (menu_idx + 1) % len(menu_items)
 
-                # Otherwise the D-pad up/down scrolls the speak phrase
-                elif phrases:
-                    if e.value[1] > 0:
+                # Otherwise the D-pad up/down scrolls the phrase, left/right the emotion
+                else:
+                    if phrases and e.value[1] > 0:
                         phrase_idx = (phrase_idx - 1) % len(phrases)
-                    elif e.value[1] < 0:
+                    elif phrases and e.value[1] < 0:
                         phrase_idx = (phrase_idx + 1) % len(phrases)
+                    if emotions and e.value[0] < 0:
+                        emotion_idx = (emotion_idx - 1) % len(emotions)
+                    elif emotions and e.value[0] > 0:
+                        emotion_idx = (emotion_idx + 1) % len(emotions)
         if grace > 0:
             grace -= 1
 
@@ -619,9 +636,11 @@ def main():
 
         # ---- speak phrase chip, B says this, cached until the selection changes ----
         if phrases:
-            if phrase_chip is None or phrase_idx != phrase_chip_idx:
-                phrase_chip = render_chip(f"SAY \u25b8 {phrases[phrase_idx].upper()}", f_chip)
-                phrase_chip_idx = phrase_idx
+            chip_key = (phrase_idx, emotion_idx)
+            if phrase_chip is None or chip_key != phrase_chip_key:
+                emotion = emotions[emotion_idx] if emotions else "neutral"
+                phrase_chip = render_chip(f"SAY \u25b8 [{emotion.upper()}] {phrases[phrase_idx].upper()}", f_chip)
+                phrase_chip_key = chip_key
             screen.blit(phrase_chip, ((SW - phrase_chip.get_width()) // 2, SH - phrase_chip.get_height() - 18))
 
         if vstate == "connected" and not link:

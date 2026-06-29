@@ -41,6 +41,18 @@ DEFAULTS = {
         "oh no",
         "thank you",
     ],
+    "emotions": [                      # D-pad left/right selects, prepended as a v3 tag
+        "neutral",
+        "cheerfully",
+        "excited",
+        "whispers",
+        "shouts",
+        "sad",
+        "nervous",
+        "angry",
+        "playfully",
+        "robotic",
+    ],
 }
 
 
