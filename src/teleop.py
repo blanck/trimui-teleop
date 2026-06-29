@@ -31,11 +31,18 @@ def is_sw(backend):
     return backend in SW_NAMES
 
 
+def stop_decoder():
+    """Kill any running decoder. Closing its TCP stream is what tells the robot's
+    video server to stop encoding/sending — it serves per-connection, so an EOF on
+    the socket frees the camera and stops the bytes."""
+    os.system("kill $(pidof hwdec_shmem) 2>/dev/null; pkill -9 -f src/sw_decode.py 2>/dev/null")
+
+
 def start_decoder(backend, host, port):
     """Stop whatever decoder is running and start the one for `backend`, both of
     which write /tmp/hwframe. Run in a thread (it sleeps ~1s to let the stream
     server free the camera before the new decoder reconnects)."""
-    os.system("kill $(pidof hwdec_shmem) 2>/dev/null; pkill -9 -f src/sw_decode.py 2>/dev/null")
+    stop_decoder()
     time.sleep(1.2)
     if is_sw(backend):
         # On the device the SW decoder runs in the mali venv; off-device (e.g.
@@ -55,6 +62,26 @@ def start_decoder(backend, host, port):
                          stdin=subprocess.DEVNULL, start_new_session=True)
     except Exception as e:
         log.write(f"start_decoder failed: {e}\n".encode())
+
+
+_BATT_DIR = "/sys/class/power_supply/axp2202-battery"
+_batt = {"t": -1e9, "pct": None, "chg": False, "ok": True}
+
+
+def handheld_battery():
+    """The TrimUI's own battery as (pct, charging), or (None, False) when the sysfs
+    node is absent (e.g. running off-device). Cached ~10 s — battery moves slowly."""
+    now = time.monotonic()
+    if _batt["ok"] and now - _batt["t"] >= 10:
+        _batt["t"] = now
+        try:
+            with open(_BATT_DIR + "/capacity") as f:
+                _batt["pct"] = int(f.read().strip())
+            with open(_BATT_DIR + "/status") as f:
+                _batt["chg"] = "harg" in f.read()        # "Charging"
+        except OSError:
+            _batt["ok"] = False; _batt["pct"] = None
+    return _batt["pct"], _batt["chg"]
 
 
 def save_setting(settings_path, section, key, value):
@@ -323,6 +350,12 @@ def main():
     shmem_path = vcfg.get("shmem", "/tmp/hwframe")
     cur_backend = vcfg.get("backend", "shmem")
 
+    # Local audio off by default: the handheld is silent (phrases are spoken on the
+    # robot), so we point SDL at its dummy audio driver before init. That keeps pygame
+    # from opening ALSA — no audio threads, no constant buffer-underrun churn (~8% CPU).
+    # Flip cfg["audio"]["enabled"] to True (e.g. for robot-mic playback) to use real audio.
+    if not cfg.get("audio", {}).get("enabled", False):
+        os.environ["SDL_AUDIODRIVER"] = "dummy"
     pygame.init()
     pygame.mouse.set_visible(False)
     # Fullscreen on the handheld; a 1280x720 window off-device so the same app is
@@ -393,10 +426,6 @@ def main():
     hud_surf = None; hud_t = 0.0
     disco_t = 0.0; disco_busy = [False]   # periodic re-discovery while no video (auto)
 
-    def make_chip():
-        return render_chip(f"RTK  {VERSION.upper()}  {'SW' if is_sw(cur_backend) else 'HW'}", f_chip)
-    chip = make_chip()
-
     def menu_list():     # built fresh each time the menu opens so values are current
         other = "Hardware (Cedar)" if is_sw(cur_backend) else "Software (PyAV)"
         inv = "On" if ctrl.cfg.get("invert_drive") else "Off"
@@ -412,6 +441,8 @@ def main():
     confirm_button = cfg["controls"].get("confirm_button", 0)
     restart_button = cfg["controls"].get("restart_button", 7)
     say_button = cfg["controls"].get("boost_button", 0)
+    video_toggle_button = cfg["controls"].get("video_toggle_button", 6)
+    video_on = True              # SELECT toggles; off stops the decoder (robot stops sending)
     restart = False
     menu_open = False; menu_idx = 0; menu_items = menu_list()
 
@@ -433,6 +464,12 @@ def main():
     pygame.event.clear()
     grace = 20                   # ~0.7s at 30Hz before quit/menu inputs are honored
     running = True
+    # Idle throttle: after idle_after_s with no input we render at idle_fps instead of
+    # fps to save CPU (ctrl packets keep flowing >2 Hz, inside the robot's 0.5s watchdog).
+    fps = int(cfg["screen"].get("fps", 30))
+    idle_fps = int(cfg["screen"].get("idle_fps", 5))
+    idle_after = float(cfg["screen"].get("idle_after_s", 5.0))
+    last_activity = time.monotonic()
     while running:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
@@ -442,6 +479,7 @@ def main():
                 print(f"BTN {e.button}", flush=True)        # log button ids (identify X)
                 if grace > 0:                                # ignore stray startup presses
                     continue
+                last_activity = time.monotonic()            # wake from idle throttle
                 if e.button in (2, 3):                       # X / Y -> capture a burst of input frames
                     cap_left = 10
 
@@ -456,6 +494,19 @@ def main():
 
                 if e.button == restart_button and not ctrl.quit_combo():
                     restart = True; running = False          # START alone -> relaunch
+                if e.button == video_toggle_button and not menu_open and not ctrl.quit_combo():
+                    video_on = not video_on                  # SELECT -> show/hide video
+                    try:                                     # tell the robot to stop/resume sending
+                        steer_sock.sendto(json.dumps({"type": "video", "on": video_on}).encode(),
+                                          (tgt["host"], tgt["steer"]))
+                    except OSError:
+                        pass
+                    if video_on:                             # reconnect: robot resumes encoding
+                        threading.Thread(target=start_decoder,
+                                         args=(cur_backend, tgt["host"], tgt["stream"]),
+                                         daemon=True).start()
+                    else:                                    # disconnect: robot stops encoding
+                        stop_decoder(); vstate = "off"
                 if e.button == menu_button:
                     menu_open = not menu_open; menu_idx = 0
                     if menu_open:
@@ -467,7 +518,6 @@ def main():
                     elif sel.startswith("Video") and time.monotonic() - switch_t > 3.0:
                         cur_backend = "shmem" if is_sw(cur_backend) else "sw"
                         save_setting(settings_path, "video", "backend", cur_backend)
-                        chip = make_chip()
                         notice = "SWITCHING TO " + ("SOFTWARE" if is_sw(cur_backend) else "HARDWARE") + " DECODE"
                         switch_t = time.monotonic()
                         threading.Thread(target=start_decoder,
@@ -504,6 +554,7 @@ def main():
                     elif sel == "Exit":
                         running = False
             elif e.type == pygame.JOYHATMOTION:
+                last_activity = time.monotonic()            # wake from idle throttle
                 # In the menu the D-pad moves the selection
                 if menu_open:
                     if e.value[1] > 0:
@@ -526,6 +577,9 @@ def main():
 
         # ---- controls -> UDP @ ~30 Hz (every loop, loop is capped at 30) ----
         cmd = ctrl.read()
+        if (cmd["fwd"] or cmd["turn"] or cmd["boost"] or cmd["action"]
+                or cmd["estop"] or menu_open):           # held stick / button -> stay awake
+            last_activity = time.monotonic()
         if grace == 0 and ctrl.quit_combo():        # Select+Start: hidden backup exit
             running = False
         if menu_open:        # while in the menu, don't drive — sticks navigate
@@ -542,38 +596,47 @@ def main():
             pass
 
         # ---- video ----
-        # Read a NON-TORN frame: copy the buffer, then re-check the published seq.
-        # If the decoder advanced >= NBUF frames during our copy it has overwritten
-        # the buffer we were reading (a burst lapped us) -> the copy may be torn ->
-        # retry with the newest. Blit every loop so the translucent HUD composites once.
-        fb = None; w = h = 0
-        for _try in range(4):
-            magic, vseq, w, h, bufstride, fmt = struct.unpack_from("<6I", mm, 0)
-            if not (w and h):
-                break
-            off = HDR + (vseq & (NBUF - 1)) * bufstride
-            fb = mm[off:off + w * h * 3]
-            vseq2 = struct.unpack_from("<I", mm, 4)[0]
-            if ((vseq2 - vseq) & 0xffffffff) < NBUF:
-                break                        # buffer was not lapped -> intact
-        if fb is not None and w and h:
-            vstate = "connected"
-            if cap_left > 0 and cap_n < 40:  # write to disk (NOT tmpfs), cap total count
-                with open(f"/mnt/UDISK/cap_{cap_n}.ppm", "wb") as cf:
-                    cf.write(f"P6\n{w} {h}\n255\n".encode()); cf.write(fb)
-                cap_n += 1; cap_left -= 1
-            else:
-                cap_left = 0
-            surf = pygame.image.frombuffer(fb, (w, h), "RGB")
-            if (w, h) != (SW, SH):
-                surf = pygame.transform.scale(surf, (SW, SH))
-            screen.blit(surf, (0, 0))
-            if vseq != last_seq:
-                last_seq = vseq
+        # SELECT hides video: skip the decode/blit entirely and tell the operator.
+        # The decoder is already stopped (so the robot stopped sending), so there's
+        # nothing fresh in shmem to read.
+        if not video_on:
+            splash(screen, SW, SH, icon, "VIDEO OFF",
+                   "press SELECT to resume", f_wait, f_row,
+                   sub_dy=3 * f_row.get_linesize())
+            vstate = "off"
         else:
-            splash(screen, SW, SH, icon, "AWAITING VIDEO LINK",
-                   ("backend: " + ("software" if is_sw(cur_backend) else "hardware")),
-                   f_wait, f_row, sub_dy=3 * f_row.get_linesize())
+            # Read a NON-TORN frame: copy the buffer, then re-check the published seq.
+            # If the decoder advanced >= NBUF frames during our copy it has overwritten
+            # the buffer we were reading (a burst lapped us) -> the copy may be torn ->
+            # retry with the newest. Blit every loop so the translucent HUD composites once.
+            fb = None; w = h = 0
+            for _try in range(4):
+                magic, vseq, w, h, bufstride, fmt = struct.unpack_from("<6I", mm, 0)
+                if not (w and h):
+                    break
+                off = HDR + (vseq & (NBUF - 1)) * bufstride
+                fb = mm[off:off + w * h * 3]
+                vseq2 = struct.unpack_from("<I", mm, 4)[0]
+                if ((vseq2 - vseq) & 0xffffffff) < NBUF:
+                    break                        # buffer was not lapped -> intact
+            if fb is not None and w and h:
+                vstate = "connected"
+                if cap_left > 0 and cap_n < 40:  # write to disk (NOT tmpfs), cap total count
+                    with open(f"/mnt/UDISK/cap_{cap_n}.ppm", "wb") as cf:
+                        cf.write(f"P6\n{w} {h}\n255\n".encode()); cf.write(fb)
+                    cap_n += 1; cap_left -= 1
+                else:
+                    cap_left = 0
+                surf = pygame.image.frombuffer(fb, (w, h), "RGB")
+                if (w, h) != (SW, SH):
+                    surf = pygame.transform.scale(surf, (SW, SH))
+                screen.blit(surf, (0, 0))
+                if vseq != last_seq:
+                    last_seq = vseq
+            else:
+                splash(screen, SW, SH, icon, "AWAITING VIDEO LINK",
+                       ("backend: " + ("software" if is_sw(cur_backend) else "hardware")),
+                       f_wait, f_row, sub_dy=3 * f_row.get_linesize())
 
         # ---- HUD viewport frame: corner brackets + subtle center reticle ----
         fc = (0, 138, 162)
@@ -591,15 +654,15 @@ def main():
             batt = td.get("batt", 0); spd = td.get("speed", 0); mode = td.get("mode", "?")
             estop = cmd["estop"] or td.get("estop"); boost = cmd["boost"]
             action = cmd["action"]
-            be = "SW" if is_sw(cur_backend) else "HW"
             rows = [
                 (OKC, "ROBOT", str(tgt["name"]).upper()[:14], ACC),
                 (OKC if link else ALERT, "LINK", f"ONLINE {rtt:.0f}MS" if link else "OFFLINE",
                  OKC if link else ALERT),
-                (OKC if vstate == "connected" else DIM, "VIDEO", f"{vstate.upper()} {be}",
+                (OKC if vstate == "connected" else DIM, "VIDEO",
+                 "LIVE" if vstate == "connected" else vstate.upper(),
                  OKC if vstate == "connected" else DIM),
                 (None, "MODE", "E-STOP" if estop else ("ACTION" if action else
-                 ("BOOST" if boost else str(mode).upper())),
+                 ("SPEAK" if boost else str(mode).upper())),
                  ALERT if estop else (ACC if action else (WARN if boost else TXT))),
                 (None, "SPEED", f"{spd:.2f} M/S", TXT),
                 (None, "SYS", f"{render_fps:.0f} FPS {cpu.pct:.0f}% CPU", TXT),
@@ -607,14 +670,18 @@ def main():
             if "batt" in td:             # robot reports a battery -> show it
                 rows.insert(3, (OKC if batt > 20 else ALERT, "POWER", f"{batt:.0f}%",
                                 OKC if batt > 20 else ALERT))
+            cb, cchg = handheld_battery()   # the controller's own battery, just under VIDEO
+            if cb is not None:
+                rows.insert(3, (OKC if cb > 20 else ALERT, "CONTROLLER",
+                                f"{cb}% BATTERY" if cchg else f"{cb}%",
+                                OKC if cb > 20 else ALERT))
             if not cmd["connected"]:     # only surface INPUT when the pad is missing
                 rows.insert(len(rows) - 1, (ALERT, "INPUT", "NO PAD", ALERT))
             hud_surf = render_panel("TELEMETRY", rows, f_hdr, f_row, 322)
         screen.blit(hud_surf, (16, 16))
-        screen.blit(chip, (SW - chip.get_width() - 16, 16))
 
         # ---- periodic re-discovery while there's no video (robot may boot later) ----
-        if auto and vstate != "connected" and not disco_busy[0] \
+        if auto and video_on and vstate != "connected" and not disco_busy[0] \
                 and now - disco_t > 5 and now - switch_t > 3:
             disco_t = now; disco_busy[0] = True
 
@@ -659,7 +726,7 @@ def main():
             render_fps = fcount / (now - t_fps); fcount = 0; t_fps = now
         if now - t_cpu >= 0.5:
             cpu.sample(); t_cpu = now
-        clock.tick(int(cfg["screen"].get("fps", 30)))
+        clock.tick(idle_fps if (now - last_activity) > idle_after else fps)
 
     # final e-stop so the robot stops promptly on exit
     try:

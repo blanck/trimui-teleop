@@ -21,6 +21,8 @@ DEFAULTS = {
     },
     "steer": {"host": "auto", "port": 49602, "hz": 30},
     "telemetry": {"port": 49603},
+    "audio": {"enabled": False},      # local sound off (handheld is silent — phrases
+                                      # play on the robot). Set True for robot-mic playback later.
     "controls": {                     # defaults for the TrimUI Smart Pro gamepad
         "drive_axis": 1, "turn_axis": 3,      # left stick Y, right stick X
         "drive_axis2": 4, "turn_axis2": 0,    # right stick Y, left stick X
@@ -29,8 +31,10 @@ DEFAULTS = {
         "action_button": 1,                    # A — passed through to the robot
         "menu_button": 8, "confirm_button": 1, "quit_buttons": [6, 7],
         "restart_button": 7,                   # START — restart the app
+        "video_toggle_button": 6,              # SELECT — show/hide video (and tell robot to stop sending)
     },
-    "screen": {"width": 1280, "height": 720, "fullscreen": True, "fps": 30},
+    "screen": {"width": 1280, "height": 720, "fullscreen": True, "fps": 30,
+               "idle_fps": 5, "idle_after_s": 5.0},  # throttle to idle_fps after idle_after_s of no input
     "phrases": [                       # D-pad up/down selects, B speaks on the robot
         "hi",
         "hello there",
@@ -40,6 +44,10 @@ DEFAULTS = {
         "nice to meet you",
         "oh no",
         "thank you",
+        "annyeonghaseyo",
+        "bangapseumnida",
+        "gamsahamnida",
+        "joesonghamnida",
     ],
     "emotions": [                      # D-pad left/right selects, prepended as a v3 tag
         "neutral",
