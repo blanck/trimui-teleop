@@ -706,7 +706,8 @@ def main():
             chip_key = (phrase_idx, emotion_idx)
             if phrase_chip is None or chip_key != phrase_chip_key:
                 emotion = emotions[emotion_idx] if emotions else "neutral"
-                phrase_chip = render_chip(f"SAY \u25b8 [{emotion.upper()}] {phrases[phrase_idx].upper()}", f_chip)
+                phrase_chip = render_chip(
+                    f"SAY (B/UP/DOWN/LEFT/RIGHT) [{emotion.upper()}] {phrases[phrase_idx].upper()}", f_chip)
                 phrase_chip_key = chip_key
             screen.blit(phrase_chip, ((SW - phrase_chip.get_width()) // 2, SH - phrase_chip.get_height() - 18))
 
