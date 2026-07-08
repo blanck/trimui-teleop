@@ -443,6 +443,8 @@ def main():
     say_button = cfg["controls"].get("boost_button", 0)
     video_toggle_button = cfg["controls"].get("video_toggle_button", 6)
     video_on = True              # SELECT toggles; off stops the decoder (robot stops sending)
+    gesture_cycle_button = cfg["controls"].get("gesture_cycle_button", 2)
+    gesture_button = cfg["controls"].get("gesture_button", 3)
     restart = False
     menu_open = False; menu_idx = 0; menu_items = menu_list()
 
@@ -455,6 +457,12 @@ def main():
     emotions = cfg.get("emotions", [])
     emotion_idx = 0
     phrase_chip = None; phrase_chip_key = None
+
+    # Gestures the robot can perform, X cycles the selection, Y performs it
+    gestures = cfg.get("gestures", [])
+    gesture_idx = 0
+    gesture_seq = 0
+    gesture_chip = None; gesture_chip_key = None
     switch_t = 0.0; notice = ""  # decoder-restart debounce + the banner shown during it
     cap_left = 0; cap_n = 0      # X-button burst capture of the raw input frames
     print(f"teleop {VERSION} up", flush=True)
@@ -480,8 +488,21 @@ def main():
                 if grace > 0:                                # ignore stray startup presses
                     continue
                 last_activity = time.monotonic()            # wake from idle throttle
-                if e.button in (2, 3):                       # X / Y -> capture a burst of input frames
+                if menu_open and e.button in (2, 3):         # X / Y in the menu -> capture a burst of input frames
                     cap_left = 10
+
+                # X cycles the selected gesture when not in the menu
+                if e.button == gesture_cycle_button and not menu_open and gestures:
+                    gesture_idx = (gesture_idx + 1) % len(gestures)
+
+                # Y performs the selected gesture when not in the menu
+                if e.button == gesture_button and not menu_open and gestures:
+                    gesture_seq += 1
+                    gesture_msg = {"type": "gesture", "seq": gesture_seq, "name": gestures[gesture_idx]}
+                    try:
+                        steer_sock.sendto(json.dumps(gesture_msg).encode(), (tgt["host"], tgt["steer"]))
+                    except OSError:
+                        pass
 
                 # B speaks the selected phrase with the selected emotion when not in the menu
                 if e.button == say_button and not menu_open and phrases:
@@ -710,6 +731,16 @@ def main():
                     f"SAY (B/UP/DOWN/LEFT/RIGHT) [{emotion.upper()}] {phrases[phrase_idx].upper()}", f_chip)
                 phrase_chip_key = chip_key
             screen.blit(phrase_chip, ((SW - phrase_chip.get_width()) // 2, SH - phrase_chip.get_height() - 18))
+
+        # ---- gesture chip above the phrase chip, X cycles, Y performs ----
+        if gestures:
+            if gesture_chip is None or gesture_idx != gesture_chip_key:
+                gesture_chip = render_chip(f"GESTURE (X/Y) {gestures[gesture_idx].upper()}", f_chip)
+                gesture_chip_key = gesture_idx
+            gy = SH - gesture_chip.get_height() - 18
+            if phrases and phrase_chip is not None:
+                gy -= phrase_chip.get_height() + 8
+            screen.blit(gesture_chip, ((SW - gesture_chip.get_width()) // 2, gy))
 
         if vstate == "connected" and not link:
             draw_banner(screen, SW, 22, "LINK LOST  --  ROBOT STOPPED", f_ban, ALERT)

@@ -28,12 +28,13 @@ CTRL_PORT, TELE_PORT, STREAM_PORT = 49602, 49603, 49601
 
 
 class RobotLink:
-    def __init__(self, name="robot", on_control=None, on_action=None, on_say=None, watchdog=0.5,
+    def __init__(self, name="robot", on_control=None, on_action=None, on_say=None, on_gesture=None, watchdog=0.5,
                  ctrl_port=CTRL_PORT, tele_port=TELE_PORT, stream_port=STREAM_PORT):
         self.name = name
         self.on_control = on_control          # callback(fwd, turn, boost, estop)
         self.on_action = on_action            # callback(); fired once per A press
         self.on_say = on_say                  # callback(text); fired on a say message
+        self.on_gesture = on_gesture          # callback(name); fired on a gesture message
         self.watchdog = watchdog              # stop if no control for this long (s)
         self.ctrl_port, self.tele_port, self.stream_port = ctrl_port, tele_port, stream_port
         self.tele = {"speed": 0.0, "mode": "idle"}   # no batt until set_telemetry(batt=...)
@@ -93,6 +94,13 @@ class RobotLink:
                 text = str(m.get("text", "")).strip()
                 if text and len(text) <= 200 and self.on_say:
                     self.on_say(text)
+                continue
+
+            # Perform a gesture, does not touch the drive watchdog
+            if msg_type == "gesture":
+                name = str(m.get("name", "")).strip().lower()
+                if name and len(name) <= 32 and self.on_gesture:
+                    self.on_gesture(name)
                 continue
             if msg_type != "ctrl":
                 continue
