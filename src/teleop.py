@@ -84,6 +84,33 @@ def handheld_battery():
     return _batt["pct"], _batt["chg"]
 
 
+_wifi = {"t": -1e9, "ssid": None, "sig": None, "ok": True}
+
+
+def wifi_link():
+    """The handheld's wifi as (ssid, signal_dbm), or (None, None) when not connected
+    or `iw` is absent (e.g. running off-device). Cached ~10 s."""
+    now = time.monotonic()
+    if _wifi["ok"] and now - _wifi["t"] >= 10:
+        _wifi["t"] = now
+        _wifi["ssid"] = _wifi["sig"] = None
+        try:
+            out = subprocess.run(["iw", "dev", "wlan0", "link"], capture_output=True,
+                                 text=True, timeout=2).stdout
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("SSID:"):
+                    _wifi["ssid"] = line[5:].strip()
+                elif line.startswith("signal:"):
+                    try:
+                        _wifi["sig"] = int(line.split()[1])
+                    except (IndexError, ValueError):
+                        pass
+        except (OSError, subprocess.TimeoutExpired):
+            _wifi["ok"] = False       # no iw on this box -> stop trying
+    return _wifi["ssid"], _wifi["sig"]
+
+
 def save_setting(settings_path, section, key, value):
     """Persist one setting so the next launch keeps it. Creates settings.json if
     it doesn't exist yet (defaults otherwise live in config.py)."""
@@ -97,7 +124,7 @@ def save_setting(settings_path, section, key, value):
     except Exception:
         pass
 
-VERSION = "build 15"         # bump on every deploy so the HUD shows it's updated
+VERSION = "build 17"         # bump on every deploy so the HUD shows it's updated
 DEADZONES = (0.06, 0.10, 0.15, 0.22)   # cycled by the in-app menu
 HDR = 4096
 NBUF = 8                     # must match hwdec_shmem.c (ring of frame buffers)
@@ -463,6 +490,7 @@ def main():
     gesture_idx = 0
     gesture_seq = 0
     gesture_chip = None; gesture_chip_key = None
+    gesture_flash_until = 0.0; gesture_flash_name = ""  # MODE flashes the sent gesture briefly
     switch_t = 0.0; notice = ""  # decoder-restart debounce + the banner shown during it
     cap_left = 0; cap_n = 0      # X-button burst capture of the raw input frames
     print(f"teleop {VERSION} up", flush=True)
@@ -499,6 +527,8 @@ def main():
                 if e.button == gesture_button and not menu_open and gestures:
                     gesture_seq += 1
                     gesture_msg = {"type": "gesture", "seq": gesture_seq, "name": gestures[gesture_idx]}
+                    gesture_flash_until = time.monotonic() + 0.35  # brief MODE flash like B's SPEAK
+                    gesture_flash_name = gestures[gesture_idx]
                     try:
                         steer_sock.sendto(json.dumps(gesture_msg).encode(), (tgt["host"], tgt["steer"]))
                     except OSError:
@@ -675,6 +705,7 @@ def main():
             batt = td.get("batt", 0); spd = td.get("speed", 0); mode = td.get("mode", "?")
             estop = cmd["estop"] or td.get("estop"); boost = cmd["boost"]
             action = cmd["action"]
+            gflash = now < gesture_flash_until
             rows = [
                 (OKC, "ROBOT", str(tgt["name"]).upper()[:14], ACC),
                 (OKC if link else ALERT, "LINK", f"ONLINE {rtt:.0f}MS" if link else "OFFLINE",
@@ -683,8 +714,8 @@ def main():
                  "LIVE" if vstate == "connected" else vstate.upper(),
                  OKC if vstate == "connected" else DIM),
                 (None, "MODE", "E-STOP" if estop else ("ACTION" if action else
-                 ("SPEAK" if boost else str(mode).upper())),
-                 ALERT if estop else (ACC if action else (WARN if boost else TXT))),
+                 ("SPEAK" if boost else (gesture_flash_name.upper() if gflash else str(mode).upper()))),
+                 ALERT if estop else (ACC if action else (WARN if (boost or gflash) else TXT))),
                 (None, "SPEED", f"{spd:.2f} M/S", TXT),
                 (None, "SYS", f"{render_fps:.0f} FPS {cpu.pct:.0f}% CPU", TXT),
             ]
@@ -696,6 +727,12 @@ def main():
                 rows.insert(3, (OKC if cb > 20 else ALERT, "CONTROLLER",
                                 f"{cb}% BATTERY" if cchg else f"{cb}%",
                                 OKC if cb > 20 else ALERT))
+            ssid, sig = wifi_link()      # the handheld's wifi, between LINK and VIDEO
+            if ssid:
+                weak = sig is not None and sig <= -70
+                rows.insert(2, (WARN if weak else OKC, "WIFI",
+                                f"{ssid.upper()[:10]} (WEAK)" if weak else ssid.upper()[:14],
+                                WARN if weak else OKC))
             if not cmd["connected"]:     # only surface INPUT when the pad is missing
                 rows.insert(len(rows) - 1, (ALERT, "INPUT", "NO PAD", ALERT))
             hud_surf = render_panel("TELEMETRY", rows, f_hdr, f_row, 322)

@@ -32,8 +32,8 @@ DEFAULTS = {
         "menu_button": 8, "confirm_button": 1, "quit_buttons": [6, 7],
         "restart_button": 7,                   # START — restart the app
         "video_toggle_button": 6,              # SELECT — show/hide video (and tell robot to stop sending)
-        "gesture_cycle_button": 2,             # X — cycle the selected gesture
-        "gesture_button": 3,                   # Y — perform the selected gesture
+        "gesture_cycle_button": 3,             # X — cycle the selected gesture (SDL 3 = X on this pad)
+        "gesture_button": 2,                   # Y — perform the selected gesture (SDL 2 = Y on this pad)
     },
     "screen": {"width": 1280, "height": 720, "fullscreen": True, "fps": 30,
                "idle_fps": 5, "idle_after_s": 5.0},  # throttle to idle_fps after idle_after_s of no input
