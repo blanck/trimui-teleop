@@ -1,3 +1,5 @@
+import time
+
 import pygame
 
 
@@ -15,6 +17,8 @@ class Controller:
         if pygame.joystick.get_count() > 0:
             self.pad = pygame.joystick.Joystick(0)
             self.pad.init()
+        self.height = 0.0            # wheel-lift setpoint, integrated from the stick
+        self._height_t = None
 
     def _deadzone(self, v):
         dz = self.cfg.get("deadzone", 0.1)
@@ -36,22 +40,37 @@ class Controller:
 
     def read(self):
         if not self.pad:
-            return {"fwd": 0.0, "turn": 0.0, "boost": False,
-                    "estop": False, "action": False, "connected": False}
+            return {"fwd": 0.0, "turn": 0.0, "height": self.height, "rock": 0.0,
+                    "boost": False, "estop": False, "action": False, "connected": False}
 
-        # either stick drives: sum both sticks' contributions, clamped to [-1, 1]
-        fwd = self._deadzone(self._axis(self.cfg["drive_axis"])) \
-            + self._deadzone(self._axis(self.cfg.get("drive_axis2", -1)))
+        # right stick drives, clamped to [-1, 1]
+        fwd = self._deadzone(self._axis(self.cfg["drive_axis"]))
         fwd = max(-1.0, min(1.0, fwd))
         if not self.cfg.get("invert_drive"):   # stick up (negative axis) = forward
             fwd = -fwd
-        turn = self._deadzone(self._axis(self.cfg["turn_axis"])) \
-             + self._deadzone(self._axis(self.cfg.get("turn_axis2", -1)))
+        turn = self._deadzone(self._axis(self.cfg["turn_axis"]))
         turn = max(-1.0, min(1.0, turn))
+
+        # left stick Y integrates the wheel-lift height setpoint (up = higher);
+        # it holds where you leave it, clamped to [0, height_max]
+        now = time.monotonic()
+        dt = min(now - self._height_t, 0.1) if self._height_t is not None else 0.0
+        self._height_t = now
+        lift = -self._deadzone(self._axis(self.cfg.get("height_axis", -1)))
+        height_max = float(self.cfg.get("height_max", 0.5))
+        self.height += lift * float(self.cfg.get("height_rate", 0.4)) * dt
+        self.height = max(0.0, min(height_max, self.height))
+
+        # left stick X rocks front/back (momentary, returns to 0 with the stick);
+        # positive = fronts up / backs down
+        rock = self._deadzone(self._axis(self.cfg.get("rock_axis", -1))) \
+             * float(self.cfg.get("rock_max", 0.5))
 
         return {
             "fwd": round(fwd, 3),
             "turn": round(turn, 3),
+            "height": round(self.height, 3),
+            "rock": round(rock, 3),
             "boost": self._button(self.cfg.get("boost_button", -1)),
             "estop": self._button(self.cfg.get("estop_button", -1)),
             "action": self._button(self.cfg.get("action_button", -1)),

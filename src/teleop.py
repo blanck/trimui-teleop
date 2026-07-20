@@ -506,6 +506,9 @@ def main():
     idle_fps = int(cfg["screen"].get("idle_fps", 5))
     idle_after = float(cfg["screen"].get("idle_after_s", 5.0))
     last_activity = time.monotonic()
+    last_height = 0.0            # detect lift setpoint changes for the idle throttle
+    height_max = float(cfg["controls"].get("height_max", 0.5)) or 0.5
+    rock_max = float(cfg["controls"].get("rock_max", 0.5)) or 0.5
     while running:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
@@ -628,17 +631,21 @@ def main():
 
         # ---- controls -> UDP @ ~30 Hz (every loop, loop is capped at 30) ----
         cmd = ctrl.read()
-        if (cmd["fwd"] or cmd["turn"] or cmd["boost"] or cmd["action"]
+        if (cmd["fwd"] or cmd["turn"] or cmd["rock"] or cmd["height"] != last_height
+                or cmd["boost"] or cmd["action"]
                 or cmd["estop"] or menu_open):           # held stick / button -> stay awake
             last_activity = time.monotonic()
+        last_height = cmd["height"]
         if grace == 0 and ctrl.quit_combo():        # Select+Start: hidden backup exit
             running = False
-        if menu_open:        # while in the menu, don't drive — sticks navigate
-            cmd = {"fwd": 0.0, "turn": 0.0, "boost": False, "estop": False,
+        if menu_open:        # while in the menu, don't drive — sticks navigate (height setpoint holds)
+            cmd = {"fwd": 0.0, "turn": 0.0, "height": cmd["height"], "rock": 0.0,
+                   "boost": False, "estop": False,
                    "action": False, "connected": cmd["connected"]}
         seq += 1
         msg = {"type": "ctrl", "seq": seq, "t": now_ms(),
                "fwd": cmd["fwd"], "turn": cmd["turn"],
+               "height": cmd["height"], "rock": cmd["rock"],
                "boost": bool(cmd["boost"]), "estop": bool(cmd["estop"]),
                "action": bool(cmd["action"])}
         try:
@@ -755,7 +762,9 @@ def main():
                 disco_busy[0] = False
             threading.Thread(target=_redisco, daemon=True).start()
 
-        # ---- throttle / steering gauges ----
+        # ---- throttle / steering / wheel-lift gauges ----
+        draw_axis(screen, 24, SH - 178, 360, 22, cmd["height"] / height_max, OKC, "LIFT", f_row)
+        draw_axis(screen, 24, SH - 136, 360, 22, cmd["rock"] / rock_max, OKC, "ROCK", f_row)
         draw_axis(screen, 24, SH - 94, 360, 22, cmd["fwd"], ACC, "THR", f_row)
         draw_axis(screen, 24, SH - 52, 360, 22, cmd["turn"], ACC, "DIR", f_row)
 

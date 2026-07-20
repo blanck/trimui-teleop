@@ -28,13 +28,15 @@ CTRL_PORT, TELE_PORT, STREAM_PORT = 49602, 49603, 49601
 
 
 class RobotLink:
-    def __init__(self, name="robot", on_control=None, on_action=None, on_say=None, on_gesture=None, watchdog=0.5,
+    def __init__(self, name="robot", on_control=None, on_action=None, on_say=None, on_gesture=None,
+                 on_lift=None, watchdog=0.5,
                  ctrl_port=CTRL_PORT, tele_port=TELE_PORT, stream_port=STREAM_PORT):
         self.name = name
         self.on_control = on_control          # callback(fwd, turn, boost, estop)
         self.on_action = on_action            # callback(); fired once per A press
         self.on_say = on_say                  # callback(text); fired on a say message
         self.on_gesture = on_gesture          # callback(name); fired on a gesture message
+        self.on_lift = on_lift                # callback(height, rock); wheel-lift setpoints
         self.watchdog = watchdog              # stop if no control for this long (s)
         self.ctrl_port, self.tele_port, self.stream_port = ctrl_port, tele_port, stream_port
         self.tele = {"speed": 0.0, "mode": "idle"}   # no batt until set_telemetry(batt=...)
@@ -112,6 +114,10 @@ class RobotLink:
             else:
                 self._emit(float(m.get("fwd", 0.0)), float(m.get("turn", 0.0)),
                            bool(m.get("boost", False)), False)
+                # lift setpoints ride along on non-estop ctrl packets; on estop
+                # (including the app's final packet) the last lift position holds
+                if self.on_lift and "height" in m:
+                    self.on_lift(float(m.get("height", 0.0)), float(m.get("rock", 0.0)))
             act = bool(m.get("action", False))
             if act and not self._action_prev and self.on_action:
                 self.on_action()
