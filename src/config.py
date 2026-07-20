@@ -26,7 +26,7 @@ DEFAULTS = {
     "controls": {                     # defaults for the TrimUI Smart Pro gamepad
         "drive_axis": 4, "turn_axis": 3,      # right stick Y, right stick X
         "height_axis": 1, "rock_axis": 0,     # left stick Y/X — wheel lift height / rock
-        "height_max": 0.5, "height_rate": 0.4,  # lift setpoint range and full-stick rate (units/s)
+        "height_max": 1.0, "height_rate": 0.4,  # lift setpoint range and full-stick rate (units/s)
         "rock_max": 0.5,                        # front/back offset at full stick
         "invert_drive": False, "deadzone": 0.12,
         "boost_button": 0, "estop_button": 4,  # B / L shoulder
