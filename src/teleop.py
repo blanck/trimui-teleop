@@ -475,15 +475,27 @@ def main():
     restart = False
     menu_open = False; menu_idx = 0; menu_items = menu_list()
 
-    # Phrases the robot can speak, D-pad up/down selects, B sends the current one
+    # Phrases the robot can speak, D-pad left/right tap selects, B sends the current one
     phrases = cfg.get("phrases", [])
     phrase_idx = 0
     say_seq = 0
 
-    # Emotions, D-pad left/right selects, prepended to the phrase as a v3 tag
+    # Emotions, D-pad left/right hold cycles tone, prepended to the phrase as a v3 tag
     emotions = cfg.get("emotions", [])
     emotion_idx = 0
     phrase_chip = None; phrase_chip_key = None
+
+    # D-pad up/down drives the body-lift motor; left/right is tap=phrase, hold=tone
+    lift_dpad_speed = float(cfg["controls"].get("lift_speed", 10.0))
+    lift_speed = 0.0
+    hat_x = 0
+    hat_y = 0
+    hat_x_down_at = None          # monotonic time when left/right was pressed
+    hat_x_dir = 0                 # -1 left, +1 right while held
+    hat_x_held_tone = False       # True once hold crossed into tone-cycling
+    last_tone_change = 0.0
+    PHRASE_HOLD_S = 0.40          # hold longer than this to cycle tone instead of phrase
+    TONE_REPEAT_S = 0.35          # tone step interval while held
 
     # Gestures the robot can perform, X cycles the selection, Y performs it
     gestures = cfg.get("gestures", [])
@@ -609,35 +621,71 @@ def main():
                         running = False
             elif e.type == pygame.JOYHATMOTION:
                 last_activity = time.monotonic()            # wake from idle throttle
+                hx, hy = int(e.value[0]), int(e.value[1])
                 # In the menu the D-pad moves the selection
                 if menu_open:
-                    if e.value[1] > 0:
+                    if hy > 0:
                         menu_idx = (menu_idx - 1) % len(menu_items)
-                    elif e.value[1] < 0:
+                    elif hy < 0:
                         menu_idx = (menu_idx + 1) % len(menu_items)
+                    hat_x = 0; hat_y = 0; lift_speed = 0.0
+                    hat_x_down_at = None; hat_x_dir = 0; hat_x_held_tone = False
 
-                # Otherwise the D-pad up/down scrolls the phrase, left/right the emotion
+                # Otherwise up/down = body lift speed, left/right = phrase tap / tone hold
                 else:
-                    if phrases and e.value[1] > 0:
-                        phrase_idx = (phrase_idx - 1) % len(phrases)
-                    elif phrases and e.value[1] < 0:
-                        phrase_idx = (phrase_idx + 1) % len(phrases)
-                    if emotions and e.value[0] < 0:
-                        emotion_idx = (emotion_idx - 1) % len(emotions)
-                    elif emotions and e.value[0] > 0:
-                        emotion_idx = (emotion_idx + 1) % len(emotions)
+                    # Vertical: hold up/down to run the lift motor
+                    hat_y = hy
+                    if hy > 0:
+                        lift_speed = lift_dpad_speed
+                    elif hy < 0:
+                        lift_speed = -lift_dpad_speed
+                    else:
+                        lift_speed = 0.0
+
+                    # Horizontal: press starts a timer; release = phrase tap unless held for tone
+                    if hx != 0 and hat_x == 0:
+                        hat_x_down_at = time.monotonic()
+                        hat_x_dir = hx
+                        hat_x_held_tone = False
+                        last_tone_change = 0.0
+                    elif hx == 0 and hat_x != 0:
+                        # Released: short press cycles phrase
+                        if (not hat_x_held_tone and phrases and hat_x_down_at is not None
+                                and time.monotonic() - hat_x_down_at < PHRASE_HOLD_S):
+                            if hat_x_dir < 0:
+                                phrase_idx = (phrase_idx - 1) % len(phrases)
+                            else:
+                                phrase_idx = (phrase_idx + 1) % len(phrases)
+                        hat_x_down_at = None
+                        hat_x_dir = 0
+                        hat_x_held_tone = False
+                    hat_x = hx
         if grace > 0:
             grace -= 1
+
+        # While left/right is held past the phrase threshold, cycle tone
+        now_hold = time.monotonic()
+        if (not menu_open and emotions and hat_x_dir != 0 and hat_x_down_at is not None
+                and now_hold - hat_x_down_at >= PHRASE_HOLD_S):
+            if not hat_x_held_tone or now_hold - last_tone_change >= TONE_REPEAT_S:
+                if hat_x_dir < 0:
+                    emotion_idx = (emotion_idx - 1) % len(emotions)
+                else:
+                    emotion_idx = (emotion_idx + 1) % len(emotions)
+                hat_x_held_tone = True
+                last_tone_change = now_hold
+                last_activity = now_hold
 
         # ---- controls -> UDP @ ~30 Hz (every loop, loop is capped at 30) ----
         cmd = ctrl.read()
         if (cmd["fwd"] or cmd["turn"] or cmd["rock"] or cmd["height"] != last_height
-                or cmd["boost"] or cmd["action"]
+                or lift_speed or cmd["boost"] or cmd["action"]
                 or cmd["estop"] or menu_open):           # held stick / button -> stay awake
             last_activity = time.monotonic()
         last_height = cmd["height"]
         if grace == 0 and ctrl.quit_combo():        # Select+Start: hidden backup exit
             running = False
+        send_lift_speed = 0.0 if menu_open else lift_speed
         if menu_open:        # while in the menu, don't drive — sticks navigate (height setpoint holds)
             cmd = {"fwd": 0.0, "turn": 0.0, "height": cmd["height"], "rock": 0.0,
                    "boost": False, "estop": False,
@@ -646,6 +694,7 @@ def main():
         msg = {"type": "ctrl", "seq": seq, "t": now_ms(),
                "fwd": cmd["fwd"], "turn": cmd["turn"],
                "height": cmd["height"], "rock": cmd["rock"],
+               "lift_speed": send_lift_speed,
                "boost": bool(cmd["boost"]), "estop": bool(cmd["estop"]),
                "action": bool(cmd["action"])}
         try:
@@ -762,19 +811,20 @@ def main():
                 disco_busy[0] = False
             threading.Thread(target=_redisco, daemon=True).start()
 
-        # ---- throttle / steering / wheel-lift gauges ----
-        draw_axis(screen, 24, SH - 178, 360, 22, cmd["height"] / height_max, OKC, "LIFT", f_row)
+        # ---- throttle / steering / lift gauges ----
+        draw_axis(screen, 24, SH - 220, 360, 22, (send_lift_speed / lift_dpad_speed) if lift_dpad_speed else 0.0, OKC, "LIFT", f_row)
+        draw_axis(screen, 24, SH - 178, 360, 22, cmd["height"] / height_max, OKC, "LEGS", f_row)
         draw_axis(screen, 24, SH - 136, 360, 22, cmd["rock"] / rock_max, OKC, "ROCK", f_row)
         draw_axis(screen, 24, SH - 94, 360, 22, cmd["fwd"], ACC, "THR", f_row)
         draw_axis(screen, 24, SH - 52, 360, 22, cmd["turn"], ACC, "DIR", f_row)
 
-        # ---- speak phrase chip, B says this, cached until the selection changes ----
+        # ---- speak phrase chip, B says this, L/R tap phrase, hold L/R tone ----
         if phrases:
             chip_key = (phrase_idx, emotion_idx)
             if phrase_chip is None or chip_key != phrase_chip_key:
                 emotion = emotions[emotion_idx] if emotions else "neutral"
                 phrase_chip = render_chip(
-                    f"SAY (B/UP/DOWN/LEFT/RIGHT) [{emotion.upper()}] {phrases[phrase_idx].upper()}", f_chip)
+                    f"SAY (B) PHRASE (L/R) TONE (HOLD L/R) [{emotion.upper()}] {phrases[phrase_idx].upper()}", f_chip)
                 phrase_chip_key = chip_key
             screen.blit(phrase_chip, ((SW - phrase_chip.get_width()) // 2, SH - phrase_chip.get_height() - 18))
 
@@ -809,7 +859,8 @@ def main():
     # final e-stop so the robot stops promptly on exit
     try:
         steer_sock.sendto(json.dumps({"type": "ctrl", "seq": seq + 1, "t": now_ms(),
-                                      "fwd": 0, "turn": 0, "boost": False, "estop": True}).encode(),
+                                      "fwd": 0, "turn": 0, "lift_speed": 0,
+                                      "boost": False, "estop": True}).encode(),
                           (tgt["host"], tgt["steer"]))
     except OSError:
         pass

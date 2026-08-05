@@ -29,14 +29,15 @@ CTRL_PORT, TELE_PORT, STREAM_PORT = 49602, 49603, 49601
 
 class RobotLink:
     def __init__(self, name="robot", on_control=None, on_action=None, on_say=None, on_gesture=None,
-                 on_lift=None, watchdog=0.5,
+                 on_lift=None, on_lift_speed=None, watchdog=0.5,
                  ctrl_port=CTRL_PORT, tele_port=TELE_PORT, stream_port=STREAM_PORT):
         self.name = name
         self.on_control = on_control          # callback(fwd, turn, boost, estop)
         self.on_action = on_action            # callback(); fired once per A press
         self.on_say = on_say                  # callback(text); fired on a say message
         self.on_gesture = on_gesture          # callback(name); fired on a gesture message
-        self.on_lift = on_lift                # callback(height, rock); wheel-lift setpoints
+        self.on_lift = on_lift                # callback(height, rock); wheel-leg lift setpoints
+        self.on_lift_speed = on_lift_speed    # callback(speed); body-lift motor speed rad/s
         self.watchdog = watchdog              # stop if no control for this long (s)
         self.ctrl_port, self.tele_port, self.stream_port = ctrl_port, tele_port, stream_port
         self.tele = {"speed": 0.0, "mode": "idle"}   # no batt until set_telemetry(batt=...)
@@ -111,13 +112,18 @@ class RobotLink:
             self._ack_seq, self._ack_t = int(m.get("seq", 0)), int(m.get("t", 0))
             if m.get("estop"):
                 self._emit(0.0, 0.0, False, True)
+                # Stop the body-lift motor on estop; leg-lift height holds its last pose
+                if self.on_lift_speed:
+                    self.on_lift_speed(0.0)
             else:
                 self._emit(float(m.get("fwd", 0.0)), float(m.get("turn", 0.0)),
                            bool(m.get("boost", False)), False)
-                # lift setpoints ride along on non-estop ctrl packets; on estop
-                # (including the app's final packet) the last lift position holds
+                # Leg-lift setpoints ride along on non-estop ctrl packets
                 if self.on_lift and "height" in m:
                     self.on_lift(float(m.get("height", 0.0)), float(m.get("rock", 0.0)))
+                # Body-lift motor speed from D-pad up/down
+                if self.on_lift_speed:
+                    self.on_lift_speed(float(m.get("lift_speed", 0.0)))
             act = bool(m.get("action", False))
             if act and not self._action_prev and self.on_action:
                 self.on_action()
@@ -127,6 +133,8 @@ class RobotLink:
         while not self._stop:
             if self._last_rx and time.monotonic() - self._last_rx > self.watchdog:
                 self._emit(0.0, 0.0, False, True)          # link stalled -> stop
+                if self.on_lift_speed:
+                    self.on_lift_speed(0.0)
             time.sleep(self.watchdog / 2)
 
     def _tele_loop(self):

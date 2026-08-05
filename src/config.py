@@ -25,9 +25,10 @@ DEFAULTS = {
                                       # play on the robot). Set True for robot-mic playback later.
     "controls": {                     # defaults for the TrimUI Smart Pro gamepad
         "drive_axis": 4, "turn_axis": 3,      # right stick Y, right stick X
-        "height_axis": 1, "rock_axis": 0,     # left stick Y/X — wheel lift height / rock
-        "height_max": 1.0, "height_rate": 0.4,  # lift setpoint range and full-stick rate (units/s)
+        "height_axis": 1, "rock_axis": 0,     # left stick Y/X — wheel-leg lift height / rock
+        "height_max": 1.0, "height_rate": 0.4,  # leg-lift setpoint range and full-stick rate (units/s)
         "rock_max": 0.5,                        # front/back offset at full stick
+        "lift_speed": 10.0,                     # D-pad up/down body-lift motor speed (rad/s)
         "invert_drive": False, "deadzone": 0.12,
         "boost_button": 0, "estop_button": 4,  # B / L shoulder
         "action_button": 1,                    # A — passed through to the robot
@@ -39,7 +40,7 @@ DEFAULTS = {
     },
     "screen": {"width": 1280, "height": 720, "fullscreen": True, "fps": 30,
                "idle_fps": 5, "idle_after_s": 5.0},  # throttle to idle_fps after idle_after_s of no input
-    "phrases": [                       # D-pad up/down selects, B speaks on the robot
+    "phrases": [                       # D-pad left/right tap selects, B speaks on the robot
         "hi",
         "hello there",
         "out of my way please",
@@ -58,7 +59,7 @@ DEFAULTS = {
         "shrug",
         "point",
     ],
-    "emotions": [                      # D-pad left/right selects, prepended as a v3 tag
+    "emotions": [                      # D-pad left/right hold cycles tone, prepended as a v3 tag
         "neutral",
         "cheerfully",
         "excited",
