@@ -132,9 +132,11 @@ decoder; the hardware (Cedar) backend is a standalone C binary.
 
 | Input | Action |
 |---|---|
-| Left stick | drive (throttle / steering) |
-| A | boost · B | e-stop |
+| Either stick | drive (throttle / steering) |
+| A | action (sent to the robot, e.g. stand / sit) |
+| B | boost · L1 | e-stop |
 | MENU | settings menu (decoder · invert drive · deadzone · rescan · resume · exit) |
+| START | restart the app |
 | Select + Start | backup quit |
 
 Indices vary per device — `python src/probe_controller.py` to map a different gamepad.

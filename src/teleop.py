@@ -31,11 +31,18 @@ def is_sw(backend):
     return backend in SW_NAMES
 
 
+def stop_decoder():
+    """Kill any running decoder. Closing its TCP stream is what tells the robot's
+    video server to stop encoding/sending — it serves per-connection, so an EOF on
+    the socket frees the camera and stops the bytes."""
+    os.system("kill $(pidof hwdec_shmem) 2>/dev/null; pkill -9 -f src/sw_decode.py 2>/dev/null")
+
+
 def start_decoder(backend, host, port):
     """Stop whatever decoder is running and start the one for `backend`, both of
     which write /tmp/hwframe. Run in a thread (it sleeps ~1s to let the stream
     server free the camera before the new decoder reconnects)."""
-    os.system("kill $(pidof hwdec_shmem) 2>/dev/null; pkill -9 -f src/sw_decode.py 2>/dev/null")
+    stop_decoder()
     time.sleep(1.2)
     if is_sw(backend):
         # On the device the SW decoder runs in the mali venv; off-device (e.g.
@@ -57,6 +64,53 @@ def start_decoder(backend, host, port):
         log.write(f"start_decoder failed: {e}\n".encode())
 
 
+_BATT_DIR = "/sys/class/power_supply/axp2202-battery"
+_batt = {"t": -1e9, "pct": None, "chg": False, "ok": True}
+
+
+def handheld_battery():
+    """The TrimUI's own battery as (pct, charging), or (None, False) when the sysfs
+    node is absent (e.g. running off-device). Cached ~10 s — battery moves slowly."""
+    now = time.monotonic()
+    if _batt["ok"] and now - _batt["t"] >= 10:
+        _batt["t"] = now
+        try:
+            with open(_BATT_DIR + "/capacity") as f:
+                _batt["pct"] = int(f.read().strip())
+            with open(_BATT_DIR + "/status") as f:
+                _batt["chg"] = "harg" in f.read()        # "Charging"
+        except OSError:
+            _batt["ok"] = False; _batt["pct"] = None
+    return _batt["pct"], _batt["chg"]
+
+
+_wifi = {"t": -1e9, "ssid": None, "sig": None, "ok": True}
+
+
+def wifi_link():
+    """The handheld's wifi as (ssid, signal_dbm), or (None, None) when not connected
+    or `iw` is absent (e.g. running off-device). Cached ~10 s."""
+    now = time.monotonic()
+    if _wifi["ok"] and now - _wifi["t"] >= 10:
+        _wifi["t"] = now
+        _wifi["ssid"] = _wifi["sig"] = None
+        try:
+            out = subprocess.run(["iw", "dev", "wlan0", "link"], capture_output=True,
+                                 text=True, timeout=2).stdout
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("SSID:"):
+                    _wifi["ssid"] = line[5:].strip()
+                elif line.startswith("signal:"):
+                    try:
+                        _wifi["sig"] = int(line.split()[1])
+                    except (IndexError, ValueError):
+                        pass
+        except (OSError, subprocess.TimeoutExpired):
+            _wifi["ok"] = False       # no iw on this box -> stop trying
+    return _wifi["ssid"], _wifi["sig"]
+
+
 def save_setting(settings_path, section, key, value):
     """Persist one setting so the next launch keeps it. Creates settings.json if
     it doesn't exist yet (defaults otherwise live in config.py)."""
@@ -70,7 +124,7 @@ def save_setting(settings_path, section, key, value):
     except Exception:
         pass
 
-VERSION = "build 15"         # bump on every deploy so the HUD shows it's updated
+VERSION = "build 17"         # bump on every deploy so the HUD shows it's updated
 DEADZONES = (0.06, 0.10, 0.15, 0.22)   # cycled by the in-app menu
 HDR = 4096
 NBUF = 8                     # must match hwdec_shmem.c (ring of frame buffers)
@@ -112,6 +166,15 @@ def load_icon(size=140):
 
 def now_ms():
     return int(time.monotonic() * 1000)
+
+
+def say_text(phrases, phrase_idx, emotions, emotion_idx):
+    """Combine the selected emotion and phrase into a v3 tagged string."""
+    phrase = phrases[phrase_idx]
+    emotion = emotions[emotion_idx] if emotions else "neutral"
+    if emotion == "neutral":
+        return phrase
+    return f"[{emotion}] {phrase}"
 
 
 class CpuMon:
@@ -262,7 +325,7 @@ def draw_reticle(screen, SW, SH):
     pygame.draw.circle(screen, col, (cx, cy), 2)
 
 
-def splash(screen, SW, SH, icon, title, sub, f_big, f_small):
+def splash(screen, SW, SH, icon, title, sub, f_big, f_small, sub_dy=0):
     """Branded full-screen message (startup scan / awaiting video)."""
     screen.fill((6, 9, 13))
     cy = SH // 2 - 70
@@ -272,7 +335,7 @@ def splash(screen, SW, SH, icon, title, sub, f_big, f_small):
     screen.blit(t, (SW // 2 - t.get_width() // 2, cy))
     if sub:
         h = f_small.render(sub, True, DIM)
-        screen.blit(h, (SW // 2 - h.get_width() // 2, cy + 54))
+        screen.blit(h, (SW // 2 - h.get_width() // 2, cy + 54 + sub_dy))
 
 
 def draw_menu(screen, SW, SH, fonts, items, idx, sub=""):
@@ -314,6 +377,12 @@ def main():
     shmem_path = vcfg.get("shmem", "/tmp/hwframe")
     cur_backend = vcfg.get("backend", "shmem")
 
+    # Local audio off by default: the handheld is silent (phrases are spoken on the
+    # robot), so we point SDL at its dummy audio driver before init. That keeps pygame
+    # from opening ALSA — no audio threads, no constant buffer-underrun churn (~8% CPU).
+    # Flip cfg["audio"]["enabled"] to True (e.g. for robot-mic playback) to use real audio.
+    if not cfg.get("audio", {}).get("enabled", False):
+        os.environ["SDL_AUDIODRIVER"] = "dummy"
     pygame.init()
     pygame.mouse.set_visible(False)
     # Fullscreen on the handheld; a 1280x720 window off-device so the same app is
@@ -384,10 +453,6 @@ def main():
     hud_surf = None; hud_t = 0.0
     disco_t = 0.0; disco_busy = [False]   # periodic re-discovery while no video (auto)
 
-    def make_chip():
-        return render_chip(f"RTK  {VERSION.upper()}  {'SW' if is_sw(cur_backend) else 'HW'}", f_chip)
-    chip = make_chip()
-
     def menu_list():     # built fresh each time the menu opens so values are current
         other = "Hardware (Cedar)" if is_sw(cur_backend) else "Software (PyAV)"
         inv = "On" if ctrl.cfg.get("invert_drive") else "Off"
@@ -401,7 +466,43 @@ def main():
 
     menu_button = cfg["controls"].get("menu_button", 8)
     confirm_button = cfg["controls"].get("confirm_button", 0)
+    restart_button = cfg["controls"].get("restart_button", 7)
+    say_button = cfg["controls"].get("boost_button", 0)
+    video_toggle_button = cfg["controls"].get("video_toggle_button", 6)
+    video_on = True              # SELECT toggles; off stops the decoder (robot stops sending)
+    gesture_cycle_button = cfg["controls"].get("gesture_cycle_button", 2)
+    gesture_button = cfg["controls"].get("gesture_button", 3)
+    restart = False
     menu_open = False; menu_idx = 0; menu_items = menu_list()
+
+    # Phrases the robot can speak, D-pad left/right tap selects, B sends the current one
+    phrases = cfg.get("phrases", [])
+    phrase_idx = 0
+    say_seq = 0
+
+    # Emotions, D-pad left/right hold cycles tone, prepended to the phrase as a v3 tag
+    emotions = cfg.get("emotions", [])
+    emotion_idx = 0
+    phrase_chip = None; phrase_chip_key = None
+
+    # D-pad up/down drives the body-lift motor; left/right is tap=phrase, hold=tone
+    lift_dpad_speed = float(cfg["controls"].get("lift_speed", 10.0))
+    lift_speed = 0.0
+    hat_x = 0
+    hat_y = 0
+    hat_x_down_at = None          # monotonic time when left/right was pressed
+    hat_x_dir = 0                 # -1 left, +1 right while held
+    hat_x_held_tone = False       # True once hold crossed into tone-cycling
+    last_tone_change = 0.0
+    PHRASE_HOLD_S = 0.40          # hold longer than this to cycle tone instead of phrase
+    TONE_REPEAT_S = 0.35          # tone step interval while held
+
+    # Gestures the robot can perform, X cycles the selection, Y performs it
+    gestures = cfg.get("gestures", [])
+    gesture_idx = 0
+    gesture_seq = 0
+    gesture_chip = None; gesture_chip_key = None
+    gesture_flash_until = 0.0; gesture_flash_name = ""  # MODE flashes the sent gesture briefly
     switch_t = 0.0; notice = ""  # decoder-restart debounce + the banner shown during it
     cap_left = 0; cap_n = 0      # X-button burst capture of the raw input frames
     print(f"teleop {VERSION} up", flush=True)
@@ -411,6 +512,15 @@ def main():
     pygame.event.clear()
     grace = 20                   # ~0.7s at 30Hz before quit/menu inputs are honored
     running = True
+    # Idle throttle: after idle_after_s with no input we render at idle_fps instead of
+    # fps to save CPU (ctrl packets keep flowing >2 Hz, inside the robot's 0.5s watchdog).
+    fps = int(cfg["screen"].get("fps", 30))
+    idle_fps = int(cfg["screen"].get("idle_fps", 5))
+    idle_after = float(cfg["screen"].get("idle_after_s", 5.0))
+    last_activity = time.monotonic()
+    last_height = 0.0            # detect lift setpoint changes for the idle throttle
+    height_max = float(cfg["controls"].get("height_max", 0.5)) or 0.5
+    rock_max = float(cfg["controls"].get("rock_max", 0.5)) or 0.5
     while running:
         for e in pygame.event.get():
             if e.type == pygame.QUIT:
@@ -420,8 +530,49 @@ def main():
                 print(f"BTN {e.button}", flush=True)        # log button ids (identify X)
                 if grace > 0:                                # ignore stray startup presses
                     continue
-                if e.button in (2, 3):                       # X / Y -> capture a burst of input frames
+                last_activity = time.monotonic()            # wake from idle throttle
+                if menu_open and e.button in (2, 3):         # X / Y in the menu -> capture a burst of input frames
                     cap_left = 10
+
+                # X cycles the selected gesture when not in the menu
+                if e.button == gesture_cycle_button and not menu_open and gestures:
+                    gesture_idx = (gesture_idx + 1) % len(gestures)
+
+                # Y performs the selected gesture when not in the menu
+                if e.button == gesture_button and not menu_open and gestures:
+                    gesture_seq += 1
+                    gesture_msg = {"type": "gesture", "seq": gesture_seq, "name": gestures[gesture_idx]}
+                    gesture_flash_until = time.monotonic() + 0.35  # brief MODE flash like B's SPEAK
+                    gesture_flash_name = gestures[gesture_idx]
+                    try:
+                        steer_sock.sendto(json.dumps(gesture_msg).encode(), (tgt["host"], tgt["steer"]))
+                    except OSError:
+                        pass
+
+                # B speaks the selected phrase with the selected emotion when not in the menu
+                if e.button == say_button and not menu_open and phrases:
+                    say_seq += 1
+                    say_msg = {"type": "say", "seq": say_seq, "text": say_text(phrases, phrase_idx, emotions, emotion_idx)}
+                    try:
+                        steer_sock.sendto(json.dumps(say_msg).encode(), (tgt["host"], tgt["steer"]))
+                    except OSError:
+                        pass
+
+                if e.button == restart_button and not ctrl.quit_combo():
+                    restart = True; running = False          # START alone -> relaunch
+                if e.button == video_toggle_button and not menu_open and not ctrl.quit_combo():
+                    video_on = not video_on                  # SELECT -> show/hide video
+                    try:                                     # tell the robot to stop/resume sending
+                        steer_sock.sendto(json.dumps({"type": "video", "on": video_on}).encode(),
+                                          (tgt["host"], tgt["steer"]))
+                    except OSError:
+                        pass
+                    if video_on:                             # reconnect: robot resumes encoding
+                        threading.Thread(target=start_decoder,
+                                         args=(cur_backend, tgt["host"], tgt["stream"]),
+                                         daemon=True).start()
+                    else:                                    # disconnect: robot stops encoding
+                        stop_decoder(); vstate = "off"
                 if e.button == menu_button:
                     menu_open = not menu_open; menu_idx = 0
                     if menu_open:
@@ -433,7 +584,6 @@ def main():
                     elif sel.startswith("Video") and time.monotonic() - switch_t > 3.0:
                         cur_backend = "shmem" if is_sw(cur_backend) else "sw"
                         save_setting(settings_path, "video", "backend", cur_backend)
-                        chip = make_chip()
                         notice = "SWITCHING TO " + ("SOFTWARE" if is_sw(cur_backend) else "HARDWARE") + " DECODE"
                         switch_t = time.monotonic()
                         threading.Thread(target=start_decoder,
@@ -469,62 +619,131 @@ def main():
                         menu_open = False
                     elif sel == "Exit":
                         running = False
-            elif e.type == pygame.JOYHATMOTION and menu_open:
-                if e.value[1] > 0:
-                    menu_idx = (menu_idx - 1) % len(menu_items)
-                elif e.value[1] < 0:
-                    menu_idx = (menu_idx + 1) % len(menu_items)
+            elif e.type == pygame.JOYHATMOTION:
+                last_activity = time.monotonic()            # wake from idle throttle
+                hx, hy = int(e.value[0]), int(e.value[1])
+                # In the menu the D-pad moves the selection
+                if menu_open:
+                    if hy > 0:
+                        menu_idx = (menu_idx - 1) % len(menu_items)
+                    elif hy < 0:
+                        menu_idx = (menu_idx + 1) % len(menu_items)
+                    hat_x = 0; hat_y = 0; lift_speed = 0.0
+                    hat_x_down_at = None; hat_x_dir = 0; hat_x_held_tone = False
+
+                # Otherwise up/down = body lift speed, left/right = phrase tap / tone hold
+                else:
+                    # Vertical: hold up/down to run the lift motor
+                    hat_y = hy
+                    if hy > 0:
+                        lift_speed = lift_dpad_speed
+                    elif hy < 0:
+                        lift_speed = -lift_dpad_speed
+                    else:
+                        lift_speed = 0.0
+
+                    # Horizontal: press starts a timer; release = phrase tap unless held for tone
+                    if hx != 0 and hat_x == 0:
+                        hat_x_down_at = time.monotonic()
+                        hat_x_dir = hx
+                        hat_x_held_tone = False
+                        last_tone_change = 0.0
+                    elif hx == 0 and hat_x != 0:
+                        # Released: short press cycles phrase
+                        if (not hat_x_held_tone and phrases and hat_x_down_at is not None
+                                and time.monotonic() - hat_x_down_at < PHRASE_HOLD_S):
+                            if hat_x_dir < 0:
+                                phrase_idx = (phrase_idx - 1) % len(phrases)
+                            else:
+                                phrase_idx = (phrase_idx + 1) % len(phrases)
+                        hat_x_down_at = None
+                        hat_x_dir = 0
+                        hat_x_held_tone = False
+                    hat_x = hx
         if grace > 0:
             grace -= 1
 
+        # While left/right is held past the phrase threshold, cycle tone
+        now_hold = time.monotonic()
+        if (not menu_open and emotions and hat_x_dir != 0 and hat_x_down_at is not None
+                and now_hold - hat_x_down_at >= PHRASE_HOLD_S):
+            if not hat_x_held_tone or now_hold - last_tone_change >= TONE_REPEAT_S:
+                if hat_x_dir < 0:
+                    emotion_idx = (emotion_idx - 1) % len(emotions)
+                else:
+                    emotion_idx = (emotion_idx + 1) % len(emotions)
+                hat_x_held_tone = True
+                last_tone_change = now_hold
+                last_activity = now_hold
+
         # ---- controls -> UDP @ ~30 Hz (every loop, loop is capped at 30) ----
         cmd = ctrl.read()
+        if (cmd["fwd"] or cmd["turn"] or cmd["rock"] or cmd["height"] != last_height
+                or lift_speed or cmd["boost"] or cmd["action"]
+                or cmd["estop"] or menu_open):           # held stick / button -> stay awake
+            last_activity = time.monotonic()
+        last_height = cmd["height"]
         if grace == 0 and ctrl.quit_combo():        # Select+Start: hidden backup exit
             running = False
-        if menu_open:        # while in the menu, don't drive — sticks navigate
-            cmd = {"fwd": 0.0, "turn": 0.0, "boost": False, "estop": False, "connected": cmd["connected"]}
+        send_lift_speed = 0.0 if menu_open else lift_speed
+        if menu_open:        # while in the menu, don't drive — sticks navigate (height setpoint holds)
+            cmd = {"fwd": 0.0, "turn": 0.0, "height": cmd["height"], "rock": 0.0,
+                   "boost": False, "estop": False,
+                   "action": False, "connected": cmd["connected"]}
         seq += 1
         msg = {"type": "ctrl", "seq": seq, "t": now_ms(),
                "fwd": cmd["fwd"], "turn": cmd["turn"],
-               "boost": bool(cmd["boost"]), "estop": bool(cmd["estop"])}
+               "height": cmd["height"], "rock": cmd["rock"],
+               "lift_speed": send_lift_speed,
+               "boost": bool(cmd["boost"]), "estop": bool(cmd["estop"]),
+               "action": bool(cmd["action"])}
         try:
             steer_sock.sendto(json.dumps(msg).encode(), (tgt["host"], tgt["steer"]))
         except OSError:
             pass
 
         # ---- video ----
-        # Read a NON-TORN frame: copy the buffer, then re-check the published seq.
-        # If the decoder advanced >= NBUF frames during our copy it has overwritten
-        # the buffer we were reading (a burst lapped us) -> the copy may be torn ->
-        # retry with the newest. Blit every loop so the translucent HUD composites once.
-        fb = None; w = h = 0
-        for _try in range(4):
-            magic, vseq, w, h, bufstride, fmt = struct.unpack_from("<6I", mm, 0)
-            if not (w and h):
-                break
-            off = HDR + (vseq & (NBUF - 1)) * bufstride
-            fb = mm[off:off + w * h * 3]
-            vseq2 = struct.unpack_from("<I", mm, 4)[0]
-            if ((vseq2 - vseq) & 0xffffffff) < NBUF:
-                break                        # buffer was not lapped -> intact
-        if fb is not None and w and h:
-            vstate = "connected"
-            if cap_left > 0 and cap_n < 40:  # write to disk (NOT tmpfs), cap total count
-                with open(f"/mnt/UDISK/cap_{cap_n}.ppm", "wb") as cf:
-                    cf.write(f"P6\n{w} {h}\n255\n".encode()); cf.write(fb)
-                cap_n += 1; cap_left -= 1
-            else:
-                cap_left = 0
-            surf = pygame.image.frombuffer(fb, (w, h), "RGB")
-            if (w, h) != (SW, SH):
-                surf = pygame.transform.scale(surf, (SW, SH))
-            screen.blit(surf, (0, 0))
-            if vseq != last_seq:
-                last_seq = vseq
+        # SELECT hides video: skip the decode/blit entirely and tell the operator.
+        # The decoder is already stopped (so the robot stopped sending), so there's
+        # nothing fresh in shmem to read.
+        if not video_on:
+            splash(screen, SW, SH, icon, "VIDEO OFF",
+                   "press SELECT to resume", f_wait, f_row,
+                   sub_dy=3 * f_row.get_linesize())
+            vstate = "off"
         else:
-            splash(screen, SW, SH, icon, "AWAITING VIDEO LINK",
-                   ("backend: " + ("software" if is_sw(cur_backend) else "hardware")),
-                   f_wait, f_row)
+            # Read a NON-TORN frame: copy the buffer, then re-check the published seq.
+            # If the decoder advanced >= NBUF frames during our copy it has overwritten
+            # the buffer we were reading (a burst lapped us) -> the copy may be torn ->
+            # retry with the newest. Blit every loop so the translucent HUD composites once.
+            fb = None; w = h = 0
+            for _try in range(4):
+                magic, vseq, w, h, bufstride, fmt = struct.unpack_from("<6I", mm, 0)
+                if not (w and h):
+                    break
+                off = HDR + (vseq & (NBUF - 1)) * bufstride
+                fb = mm[off:off + w * h * 3]
+                vseq2 = struct.unpack_from("<I", mm, 4)[0]
+                if ((vseq2 - vseq) & 0xffffffff) < NBUF:
+                    break                        # buffer was not lapped -> intact
+            if fb is not None and w and h:
+                vstate = "connected"
+                if cap_left > 0 and cap_n < 40:  # write to disk (NOT tmpfs), cap total count
+                    with open(f"/mnt/UDISK/cap_{cap_n}.ppm", "wb") as cf:
+                        cf.write(f"P6\n{w} {h}\n255\n".encode()); cf.write(fb)
+                    cap_n += 1; cap_left -= 1
+                else:
+                    cap_left = 0
+                surf = pygame.image.frombuffer(fb, (w, h), "RGB")
+                if (w, h) != (SW, SH):
+                    surf = pygame.transform.scale(surf, (SW, SH))
+                screen.blit(surf, (0, 0))
+                if vseq != last_seq:
+                    last_seq = vseq
+            else:
+                splash(screen, SW, SH, icon, "AWAITING VIDEO LINK",
+                       ("backend: " + ("software" if is_sw(cur_backend) else "hardware")),
+                       f_wait, f_row, sub_dy=3 * f_row.get_linesize())
 
         # ---- HUD viewport frame: corner brackets + subtle center reticle ----
         fc = (0, 138, 162)
@@ -541,27 +760,42 @@ def main():
             hud_t = now
             batt = td.get("batt", 0); spd = td.get("speed", 0); mode = td.get("mode", "?")
             estop = cmd["estop"] or td.get("estop"); boost = cmd["boost"]
-            be = "SW" if is_sw(cur_backend) else "HW"
+            action = cmd["action"]
+            gflash = now < gesture_flash_until
             rows = [
+                (OKC, "ROBOT", str(tgt["name"]).upper()[:14], ACC),
                 (OKC if link else ALERT, "LINK", f"ONLINE {rtt:.0f}MS" if link else "OFFLINE",
                  OKC if link else ALERT),
-                (None, "ROBOT", str(tgt["name"]).upper()[:14], ACC),
-                (OKC if vstate == "connected" else DIM, "VIDEO", f"{vstate.upper()} {be}",
+                (OKC if vstate == "connected" else DIM, "VIDEO",
+                 "LIVE" if vstate == "connected" else vstate.upper(),
                  OKC if vstate == "connected" else DIM),
-                (OKC if batt > 20 else ALERT, "POWER", f"{batt:.0f}%", OKC if batt > 20 else ALERT),
+                (None, "MODE", "E-STOP" if estop else ("ACTION" if action else
+                 ("SPEAK" if boost else (gesture_flash_name.upper() if gflash else str(mode).upper()))),
+                 ALERT if estop else (ACC if action else (WARN if (boost or gflash) else TXT))),
                 (None, "SPEED", f"{spd:.2f} M/S", TXT),
-                (None, "MODE", "E-STOP" if estop else ("BOOST" if boost else str(mode).upper()),
-                 ALERT if estop else (WARN if boost else TXT)),
-                (OKC if cmd["connected"] else ALERT, "INPUT",
-                 "PAD OK" if cmd["connected"] else "NO PAD", TXT if cmd["connected"] else ALERT),
-                (None, "SYS", f"{render_fps:.0f}FPS {cpu.pct:.0f}%CPU", WARN),
+                (None, "SYS", f"{render_fps:.0f} FPS {cpu.pct:.0f}% CPU", TXT),
             ]
+            if "batt" in td:             # robot reports a battery -> show it
+                rows.insert(3, (OKC if batt > 20 else ALERT, "POWER", f"{batt:.0f}%",
+                                OKC if batt > 20 else ALERT))
+            cb, cchg = handheld_battery()   # the controller's own battery, just under VIDEO
+            if cb is not None:
+                rows.insert(3, (OKC if cb > 20 else ALERT, "CONTROLLER",
+                                f"{cb}% BATTERY" if cchg else f"{cb}%",
+                                OKC if cb > 20 else ALERT))
+            ssid, sig = wifi_link()      # the handheld's wifi, between LINK and VIDEO
+            if ssid:
+                weak = sig is not None and sig <= -70
+                rows.insert(2, (WARN if weak else OKC, "WIFI",
+                                f"{ssid.upper()[:10]} (WEAK)" if weak else ssid.upper()[:14],
+                                WARN if weak else OKC))
+            if not cmd["connected"]:     # only surface INPUT when the pad is missing
+                rows.insert(len(rows) - 1, (ALERT, "INPUT", "NO PAD", ALERT))
             hud_surf = render_panel("TELEMETRY", rows, f_hdr, f_row, 322)
         screen.blit(hud_surf, (16, 16))
-        screen.blit(chip, (SW - chip.get_width() - 16, 16))
 
         # ---- periodic re-discovery while there's no video (robot may boot later) ----
-        if auto and vstate != "connected" and not disco_busy[0] \
+        if auto and video_on and vstate != "connected" and not disco_busy[0] \
                 and now - disco_t > 5 and now - switch_t > 3:
             disco_t = now; disco_busy[0] = True
 
@@ -577,9 +811,32 @@ def main():
                 disco_busy[0] = False
             threading.Thread(target=_redisco, daemon=True).start()
 
-        # ---- throttle / steering gauges ----
+        # ---- throttle / steering / lift gauges ----
+        draw_axis(screen, 24, SH - 220, 360, 22, (send_lift_speed / lift_dpad_speed) if lift_dpad_speed else 0.0, OKC, "LIFT", f_row)
+        draw_axis(screen, 24, SH - 178, 360, 22, cmd["height"] / height_max, OKC, "LEGS", f_row)
+        draw_axis(screen, 24, SH - 136, 360, 22, cmd["rock"] / rock_max, OKC, "ROCK", f_row)
         draw_axis(screen, 24, SH - 94, 360, 22, cmd["fwd"], ACC, "THR", f_row)
         draw_axis(screen, 24, SH - 52, 360, 22, cmd["turn"], ACC, "DIR", f_row)
+
+        # ---- speak phrase chip, B says this, L/R tap phrase, hold L/R tone ----
+        if phrases:
+            chip_key = (phrase_idx, emotion_idx)
+            if phrase_chip is None or chip_key != phrase_chip_key:
+                emotion = emotions[emotion_idx] if emotions else "neutral"
+                phrase_chip = render_chip(
+                    f"SAY (B) PHRASE (L/R) TONE (HOLD L/R) [{emotion.upper()}] {phrases[phrase_idx].upper()}", f_chip)
+                phrase_chip_key = chip_key
+            screen.blit(phrase_chip, ((SW - phrase_chip.get_width()) // 2, SH - phrase_chip.get_height() - 18))
+
+        # ---- gesture chip above the phrase chip, X cycles, Y performs ----
+        if gestures:
+            if gesture_chip is None or gesture_idx != gesture_chip_key:
+                gesture_chip = render_chip(f"GESTURE (X/Y) {gestures[gesture_idx].upper()}", f_chip)
+                gesture_chip_key = gesture_idx
+            gy = SH - gesture_chip.get_height() - 18
+            if phrases and phrase_chip is not None:
+                gy -= phrase_chip.get_height() + 8
+            screen.blit(gesture_chip, ((SW - gesture_chip.get_width()) // 2, gy))
 
         if vstate == "connected" and not link:
             draw_banner(screen, SW, 22, "LINK LOST  --  ROBOT STOPPED", f_ban, ALERT)
@@ -597,18 +854,22 @@ def main():
             render_fps = fcount / (now - t_fps); fcount = 0; t_fps = now
         if now - t_cpu >= 0.5:
             cpu.sample(); t_cpu = now
-        clock.tick(int(cfg["screen"].get("fps", 30)))
+        clock.tick(idle_fps if (now - last_activity) > idle_after else fps)
 
     # final e-stop so the robot stops promptly on exit
     try:
         steer_sock.sendto(json.dumps({"type": "ctrl", "seq": seq + 1, "t": now_ms(),
-                                      "fwd": 0, "turn": 0, "boost": False, "estop": True}).encode(),
+                                      "fwd": 0, "turn": 0, "lift_speed": 0,
+                                      "boost": False, "estop": True}).encode(),
                           (tgt["host"], tgt["steer"]))
     except OSError:
         pass
     # stop the decoder we own
     os.system("kill $(pidof hwdec_shmem) 2>/dev/null; pkill -9 -f src/sw_decode.py 2>/dev/null")
     pygame.quit()
+    if restart:
+        print("restarting", flush=True)
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
 
 if __name__ == "__main__":

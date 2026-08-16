@@ -61,6 +61,7 @@ class Robot:
 
         self.fwd = self.turn = 0.0
         self.boost = self.estop = False
+        self.standing = False; self.action_prev = False   # A toggles stand/sit
         self.ctrl_seq = 0; self.ctrl_t = 0; self.ctrl_pkts = 0
         self.last_rx = 0.0; self.device_ip = None
         self.view = (430, 150, 800, 560)        # x0,y0,x1,y1
@@ -83,6 +84,10 @@ class Robot:
                 if m.get("type", "ctrl") == "ctrl":
                     self.fwd = float(m.get("fwd", 0)); self.turn = float(m.get("turn", 0))
                     self.boost = bool(m.get("boost", False)); self.estop = bool(m.get("estop", False))
+                    act = bool(m.get("action", False))
+                    if act and not self.action_prev:
+                        self.standing = not self.standing
+                    self.action_prev = act
                     self.ctrl_seq = int(m.get("seq", 0)); self.ctrl_t = int(m.get("t", 0))
                     self.device_ip = addr[0]; self.last_rx = now; self.ctrl_pkts += 1
             except Exception:
@@ -146,6 +151,8 @@ class Robot:
         self.text(24, 78, "LINK:  " + ("OK" if link else "LOST — stopped"), GREEN if link else RED)
         self.text(24, 108, f"FROM:  {self.device_ip or '—'}", CYAN if link else DIM)
         self.text(24, 138, f"MODE:  {self.mode.upper()}", RED if self.mode in ("estop", "lost") else WHITE)
+        self.text(24, 168, f"POSE:  {'STANDING' if self.standing else 'SITTING'}",
+                  CYAN if self.standing else DIM)
 
         self.bar(24, 200, 240, 22, self.fwd, CYAN, "FWD")
         self.bar(24, 256, 240, 22, self.turn, ORANGE, "TURN")

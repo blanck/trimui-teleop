@@ -35,7 +35,7 @@ falling back to a broadcast scan. `name` is shown in the HUD so you see what you
 Sent at **30 Hz** while the app shows video, plus one final `estop` frame on exit.
 
 ```json
-{"type":"ctrl","seq":1234,"t":880123,"fwd":0.62,"turn":-0.35,"boost":false,"estop":false}
+{"type":"ctrl","seq":1234,"t":880123,"fwd":0.62,"turn":-0.35,"boost":false,"estop":false,"action":false}
 ```
 
 | field | meaning |
@@ -45,6 +45,7 @@ Sent at **30 Hz** while the app shows video, plus one final `estop` frame on exi
 | `fwd` | drive, −1..1 (forward +) |
 | `turn`| steer, −1..1 (right +) |
 | `boost` / `estop` | momentary buttons |
+| `action` | momentary A button — robot-defined (e.g. stand/sit); act on the rising edge |
 
 `fwd`/`turn` are **normalized** — the robot side scales them to its own units
 (m/s + rad/s for ROS, wheel PWM for a Pi, throttle/steering for DonkeyCar, …).
@@ -60,7 +61,7 @@ Robot replies to the **source IP of the control packets**, at **10 Hz**.
 
 | field | meaning |
 |-------|---------|
-| `batt`| battery %, 0..100 |
+| `batt`| battery %, 0..100 — optional; the handheld hides POWER if absent |
 | `speed`| speed magnitude (m/s or sim units) |
 | `mode`| `"idle"` / `"drive"` / `"estop"` / `"lost"` / freeform |
 | `ack_seq` / `ack_t` | last control `seq`/`t` the robot acted on (for RTT) |
@@ -86,7 +87,8 @@ from robot_link import RobotLink          # needs src/ on the path
 def drive(fwd, turn, boost, estop):        # fwd/turn in −1..1; estop → stop
     ...                                     # actuate your motors
 
-link = RobotLink(name="my-robot", on_control=drive)
+link = RobotLink(name="my-robot", on_control=drive,
+                 on_action=stand_or_sit)    # optional: A button, once per press
 link.set_telemetry(batt=87, speed=0.4, mode="drive")   # optional, anytime
 link.run()                                  # also serves video? no — see below
 ```

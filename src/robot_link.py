@@ -9,7 +9,8 @@ new platform is just:
     def drive(fwd, turn, boost, estop):     # fwd/turn in -1..1; estop -> stop
         ...                                  # actuate your motors here
 
-    link = RobotLink(name="my-robot", on_control=drive)
+    link = RobotLink(name="my-robot", on_control=drive,
+                     on_action=lambda: ...)  # optional: A button, once per press
     link.set_telemetry(batt=87, speed=0.4, mode="drive")   # optional, anytime
     link.run()                               # blocks; or link.start() to background it
 
@@ -27,16 +28,23 @@ CTRL_PORT, TELE_PORT, STREAM_PORT = 49602, 49603, 49601
 
 
 class RobotLink:
-    def __init__(self, name="robot", on_control=None, watchdog=0.5,
+    def __init__(self, name="robot", on_control=None, on_action=None, on_say=None, on_gesture=None,
+                 on_lift=None, on_lift_speed=None, watchdog=0.5,
                  ctrl_port=CTRL_PORT, tele_port=TELE_PORT, stream_port=STREAM_PORT):
         self.name = name
         self.on_control = on_control          # callback(fwd, turn, boost, estop)
+        self.on_action = on_action            # callback(); fired once per A press
+        self.on_say = on_say                  # callback(text); fired on a say message
+        self.on_gesture = on_gesture          # callback(name); fired on a gesture message
+        self.on_lift = on_lift                # callback(height, rock); wheel-leg lift setpoints
+        self.on_lift_speed = on_lift_speed    # callback(speed); body-lift motor speed rad/s
         self.watchdog = watchdog              # stop if no control for this long (s)
         self.ctrl_port, self.tele_port, self.stream_port = ctrl_port, tele_port, stream_port
-        self.tele = {"batt": 100.0, "speed": 0.0, "mode": "idle"}
+        self.tele = {"speed": 0.0, "mode": "idle"}   # no batt until set_telemetry(batt=...)
         self.device_ip = None
         self._last_rx = 0.0
         self._ack_seq = self._ack_t = 0
+        self._action_prev = False
         self._stop = False
         self._rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._rx.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -82,32 +90,64 @@ class RobotLink:
                 continue
             except Exception:
                 continue
-            if m.get("type", "ctrl") != "ctrl":
+            msg_type = m.get("type", "ctrl")
+
+            # Speak a phrase, does not touch the drive watchdog
+            if msg_type == "say":
+                text = str(m.get("text", "")).strip()
+                if text and len(text) <= 200 and self.on_say:
+                    self.on_say(text)
+                continue
+
+            # Perform a gesture, does not touch the drive watchdog
+            if msg_type == "gesture":
+                name = str(m.get("name", "")).strip().lower()
+                if name and len(name) <= 32 and self.on_gesture:
+                    self.on_gesture(name)
+                continue
+            if msg_type != "ctrl":
                 continue
             self.device_ip = addr[0]
             self._last_rx = time.monotonic()
             self._ack_seq, self._ack_t = int(m.get("seq", 0)), int(m.get("t", 0))
             if m.get("estop"):
                 self._emit(0.0, 0.0, False, True)
+                # Stop the body-lift motor on estop; leg-lift height holds its last pose
+                if self.on_lift_speed:
+                    self.on_lift_speed(0.0)
             else:
                 self._emit(float(m.get("fwd", 0.0)), float(m.get("turn", 0.0)),
                            bool(m.get("boost", False)), False)
+                # Leg-lift setpoints ride along on non-estop ctrl packets
+                if self.on_lift and "height" in m:
+                    self.on_lift(float(m.get("height", 0.0)), float(m.get("rock", 0.0)))
+                # Body-lift motor speed from D-pad up/down
+                if self.on_lift_speed:
+                    self.on_lift_speed(float(m.get("lift_speed", 0.0)))
+            act = bool(m.get("action", False))
+            if act and not self._action_prev and self.on_action:
+                self.on_action()
+            self._action_prev = act
 
     def _wd_loop(self):
         while not self._stop:
             if self._last_rx and time.monotonic() - self._last_rx > self.watchdog:
                 self._emit(0.0, 0.0, False, True)          # link stalled -> stop
+                if self.on_lift_speed:
+                    self.on_lift_speed(0.0)
             time.sleep(self.watchdog / 2)
 
     def _tele_loop(self):
         while not self._stop:
             if self.device_ip:
                 stale = self._last_rx and time.monotonic() - self._last_rx > self.watchdog
-                msg = json.dumps({"type": "tele", "t": int(time.monotonic() * 1000),
-                                  "batt": round(self.tele["batt"], 1),
-                                  "speed": round(self.tele["speed"], 2),
-                                  "mode": "lost" if stale else self.tele["mode"],
-                                  "ack_seq": self._ack_seq, "ack_t": self._ack_t}).encode()
+                m = {"type": "tele", "t": int(time.monotonic() * 1000),
+                     "speed": round(self.tele["speed"], 2),
+                     "mode": "lost" if stale else self.tele["mode"],
+                     "ack_seq": self._ack_seq, "ack_t": self._ack_t}
+                if "batt" in self.tele:   # only report a battery the adapter has set
+                    m["batt"] = round(self.tele["batt"], 1)
+                msg = json.dumps(m).encode()
                 try:
                     self._tx.sendto(msg, (self.device_ip, self.tele_port))
                 except OSError:

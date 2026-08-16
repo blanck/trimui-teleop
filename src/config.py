@@ -21,12 +21,56 @@ DEFAULTS = {
     },
     "steer": {"host": "auto", "port": 49602, "hz": 30},
     "telemetry": {"port": 49603},
+    "audio": {"enabled": False},      # local sound off (handheld is silent — phrases
+                                      # play on the robot). Set True for robot-mic playback later.
     "controls": {                     # defaults for the TrimUI Smart Pro gamepad
-        "drive_axis": 1, "turn_axis": 3, "invert_drive": True, "deadzone": 0.12,
-        "boost_button": 0, "estop_button": 1, "menu_button": 8,
-        "confirm_button": 1, "quit_buttons": [6, 7],
+        "drive_axis": 4, "turn_axis": 3,      # right stick Y, right stick X
+        "height_axis": 1, "rock_axis": 0,     # left stick Y/X — wheel-leg lift height / rock
+        "height_max": 1.0, "height_rate": 0.4,  # leg-lift setpoint range and full-stick rate (units/s)
+        "rock_max": 0.5,                        # front/back offset at full stick
+        "lift_speed": 10.0,                     # D-pad up/down body-lift motor speed (rad/s)
+        "invert_drive": False, "deadzone": 0.12,
+        "boost_button": 0, "estop_button": 4,  # B / L shoulder
+        "action_button": 1,                    # A — passed through to the robot
+        "menu_button": 8, "confirm_button": 1, "quit_buttons": [6, 7],
+        "restart_button": 7,                   # START — restart the app
+        "video_toggle_button": 6,              # SELECT — show/hide video (and tell robot to stop sending)
+        "gesture_cycle_button": 3,             # X — cycle the selected gesture (SDL 3 = X on this pad)
+        "gesture_button": 2,                   # Y — perform the selected gesture (SDL 2 = Y on this pad)
     },
-    "screen": {"width": 1280, "height": 720, "fullscreen": True, "fps": 30},
+    "screen": {"width": 1280, "height": 720, "fullscreen": True, "fps": 30,
+               "idle_fps": 5, "idle_after_s": 5.0},  # throttle to idle_fps after idle_after_s of no input
+    "phrases": [                       # D-pad left/right tap selects, B speaks on the robot
+        "hi",
+        "hello there",
+        "out of my way please",
+        "beep boop",
+        "i am a robot",
+        "nice to meet you",
+        "oh no",
+        "thank you",
+        "annyeonghaseyo",
+        "bangapseumnida",
+        "gamsahamnida",
+        "joesonghamnida",
+    ],
+    "gestures": [                      # X cycles, Y performs on the robot
+        "wave",
+        "shrug",
+        "point",
+    ],
+    "emotions": [                      # D-pad left/right hold cycles tone, prepended as a v3 tag
+        "neutral",
+        "cheerfully",
+        "excited",
+        "whispers",
+        "shouts",
+        "sad",
+        "nervous",
+        "angry",
+        "playfully",
+        "robotic",
+    ],
 }
 
 
